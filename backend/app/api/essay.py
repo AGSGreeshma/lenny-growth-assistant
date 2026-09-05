@@ -1,0 +1,64 @@
+import logging
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session as DbSession
+
+from app.database import get_db
+from app.models.db_models import ChatSession, ChatMessage
+from app.models.schemas import EssayRequest, EssayResponse, Source
+from app.rag.retriever import TranscriptRetriever
+from app.skills.ship30 import generate_ship30_essay
+
+logger = logging.getLogger("lenny-assistant")
+
+router = APIRouter(prefix="/api/essay", tags=["essay"])
+
+
+def to_source(chunk: dict) -> Source:
+    return Source(
+        episode=chunk.get("episode") or chunk.get("episode_title") or "Unknown Episode",
+        guest=chunk.get("guest") or chunk.get("guest_name") or chunk.get("speaker") or "Unknown Guest",
+        timestamp=chunk.get("timestamp") or chunk.get("timestamp_ref") or "N/A",
+        score=chunk.get("score") or 0.0,
+        url=chunk.get("url"),
+    )
+
+
+@router.post("", response_model=EssayResponse)
+async def create_essay(request: EssayRequest, db: DbSession = Depends(get_db)):
+    session = db.query(ChatSession).filter(ChatSession.id == request.session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found. Create one via POST /api/sessions first.")
+
+    topic = request.topic.strip()
+    if not topic:
+        raise HTTPException(status_code=400, detail="Topic cannot be empty.")
+
+    try:
+        retriever = TranscriptRetriever(db)
+        chunks = retriever.retrieve_relevant_chunks(topic, top_k=6)
+    except Exception:
+        logger.exception("Retrieval failed")
+        raise HTTPException(status_code=502, detail="Retrieval step failed. Check DB connection.")
+
+    try:
+        essay = await generate_ship30_essay(topic, chunks)
+    except Exception:
+        logger.exception("Essay generation failed")
+        raise HTTPException(status_code=502, detail="Essay generation failed. Check Ollama/OpenAI configuration.")
+
+    sources = [to_source(c) for c in chunks]
+
+    # Persisted as a message with artifact_type="markdown" so it shows up in
+    # session history and can be distinguished from a normal chat reply.
+    artifact_msg = ChatMessage(
+        session_id=request.session_id,
+        role="assistant",
+        content=essay,
+        sources=[s.model_dump() for s in sources],
+        artifact_type="markdown",
+    )
+    db.add(artifact_msg)
+    db.commit()
+
+    return EssayResponse(session_id=request.session_id, essay=essay, sources=sources)
