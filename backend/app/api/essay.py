@@ -7,6 +7,7 @@ from app.config import RAG_MIN_SIMILARITY
 from app.database import get_db
 from app.models.db_models import ChatSession, ChatMessage
 from app.models.schemas import EssayRequest, EssayResponse, Source
+from app.llm.router import GenerationTimeoutError
 from app.rag.generator import NOT_GROUNDED_MESSAGE
 from app.rag.retriever import TranscriptRetriever
 from app.skills.ship30 import generate_ship30_essay
@@ -87,6 +88,9 @@ async def create_essay(
     try:
         essay, provider = await generate_ship30_essay(topic, chunks, force_provider=request.provider)
 
+    except GenerationTimeoutError as exc:
+        logger.warning("Essay generation timed out: %s", exc)
+        raise HTTPException(status_code=504, detail=str(exc)) from exc
     except Exception as exc:
         logger.exception("Essay generation failed")
         raise HTTPException(

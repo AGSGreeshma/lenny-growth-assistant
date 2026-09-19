@@ -23,6 +23,13 @@ HTML one-pager.
 > not affect the mandatory local Ollama demo path, which is unaffected and
 > fully verified. Fixing this requires adding credits to that account, which
 > is out of scope for this engagement.
+>
+> **Deliberate trade-off:** the Ship 30 for 30 skill targets ~1,240–1,250
+> words as its ideal content length, but the local Ollama path runs under a
+> 120s soft generation budget (streamed, not a hard cutoff) so the mandatory
+> local demo stays responsive on CPU-only hardware — a locally-generated
+> essay may come back shorter than the ideal target, by design. See "Ship 30
+> for 30 length vs. local-model latency" below for the full reasoning.
 
 ---
 
@@ -165,10 +172,14 @@ running, a DB connection lost mid-request returns a `502` with an
 actionable message.
 
 **What happens on an LLM timeout?**
-`OLLAMA_TIMEOUT_SECONDS` (default 300, sized from measured live latency —
-see `.env.example`) bounds the Ollama call; on timeout it's treated the same
-as any other Ollama failure and retried against OpenAI per the fallback
-logic above.
+`OLLAMA_TIMEOUT_SECONDS` (default `120`) is a **soft** wall-clock generation
+budget, not a hard cutoff — Ollama's response is streamed, and if this budget
+runs out before the model finishes, whatever coherent content has been
+generated so far is returned (trimmed to a clean sentence boundary) instead
+of being discarded. Only if that leaves too little content to be useful does
+it retry against OpenAI (if configured) or return a clean, actionable `504`.
+See "Ship 30 for 30 length vs. local-model latency" below for why 120s was
+chosen deliberately, not guessed.
 
 ---
 
@@ -355,6 +366,52 @@ Then hit `/api/chat`, `/api/essay`, and `/api/artifact` and confirm
 
 ---
 
+## Ship 30 for 30 length vs. local-model latency
+
+**Content target:** the Ship 30 for 30 skill (`app/skills/ship30.py`) is
+designed around an approximately 1,240–1,250-word long-form essay format —
+strong hook, one section per grounded source, skimmable Markdown, an
+actionable checklist.
+
+**Runtime constraint:** the mandatory local demo path runs this generation
+through Ollama on CPU, where long-form generation is genuinely
+latency-sensitive — live measurement on this project's own reference
+hardware put a full-length essay well past a minute, and sometimes past
+three, depending on the machine (see `agent_transcripts/13`).
+
+**Engineering decision:** rather than force the local model to keep
+generating until it hits the exact target length (which would make the
+mandatory local demo unpredictably slow, or push it past a usable runtime
+budget), `OLLAMA_TIMEOUT_SECONDS` (default `120`) is a deliberate **soft**
+generation budget. The response is streamed, and if the budget runs out
+before the model finishes, whatever coherent content has been generated so
+far is returned — trimmed to a clean sentence ending — rather than
+discarded. The prompt itself is written to prioritize, in order: groundedness
+→ relevance → coherent narrative → useful takeaways → structure/readability
+→ reasonable length → exact word count, and explicitly instructs the model
+not to pad toward the target. **A shorter-than-ideal essay on the local path
+is the intended, documented behavior, not a bug** — quality and groundedness
+within the runtime budget take priority over hitting an exact word count.
+
+If the budget runs out so early that too little was generated to be useful
+(not just "shorter," but not actually a usable answer), that's treated as a
+failure: the app retries against OpenAI if configured, or returns a clean
+`504` explaining the local runtime limit was exceeded — never a raw
+stack trace.
+
+**Cloud path (optional):** when a supported cloud provider such as OpenAI is
+configured with a valid, funded API key, the same generation workflow
+benefits from that provider's own inference speed and isn't bound by this
+machine's CPU throughput, so it has much more practical headroom to reach
+the full ~1,250-word target on every request. This repo's own
+`OPENAI_API_KEY` is *not* currently backed by a funded account (see the
+Status note at the top of this README) — the cloud path is code-complete and
+was verified reaching OpenAI's real API, but a real successful long-form
+cloud generation has not been observed end-to-end. The local Ollama path
+remains fully functional and is what the mandatory demo relies on regardless.
+
+---
+
 ## Key environment variables
 
 See `backend/.env.example` for the full list with explanations. The most
@@ -364,7 +421,7 @@ relevant:
 |---|---|
 | `DATABASE_URL` | Postgres connection string (pgvector required) |
 | `OLLAMA_BASE_URL` / `OLLAMA_MODEL` | Local model config (mandatory path) |
-| `OLLAMA_TIMEOUT_SECONDS` | Ollama request timeout (default `300`; on CPU-only reference hardware, chat/essay/HTML-artifact generation measured 64s/78-105s/121s+ on one machine and up to 198.6s/180.5s (essay/HTML) on another — CPU-only throughput varies meaningfully by hardware) |
+| `OLLAMA_TIMEOUT_SECONDS` | Soft generation budget, not a hard cutoff (default `120`, deliberate trade-off — see "Ship 30 for 30 length vs. local-model latency" above). Responses are streamed; if the budget runs out, whatever was generated so far is returned (trimmed cleanly) rather than discarded. |
 | `OPENAI_API_KEY` | Cloud fallback; blank = fully offline (fails if Ollama also fails) |
 | `FORCE_LLM_PROVIDER` | Deployment-wide provider override (`openai` or blank) |
 | `RAG_MIN_SIMILARITY` | Cosine-similarity floor for "grounded" (default `0.30`) |

@@ -18,6 +18,7 @@ The transcripts document problems encountered during development, the investigat
 - `10-turn-aware-chunking-regex-bug.md` — A regex using `\s*` instead of `[ \t]*` silently swallowed a whole paragraph as a "speaker name" by matching across a line boundary, caught by a value-level (not just count-level) smoke test
 - `11-hedging-answer-prompt-fix.md` — Diagnosing and fixing answers that correctly cited sources yet still claimed "the transcripts don't provide enough information" — a system-prompt instruction that was redundant with (and fighting against) the retrieval floor added later
 - `12-accessibility-audit-pass.md` — A full component-by-component accessibility pass found the app had no `<h1>` once a conversation started, and five interactive controls missing the focus-visible style used everywhere else
+- `13-ship30-length-vs-latency-soft-deadline.md` — Turning "the local Ollama demo must stay responsive" and "the Ship 30 essay should be ~1,250 words" from a silent conflict into a documented, deliberate soft-deadline trade-off: streaming generation, a 120s wall-clock budget that returns partial-but-coherent content instead of failing outright, and a rewritten prompt that explicitly deprioritizes exact word count below groundedness and coherence
 
 ## Purpose
 

@@ -12,25 +12,51 @@ OLLAMA_BASE_URL = os.getenv(
     "http://localhost:11434"
 )
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
-# Measured live, end-to-end, against this app's own API on reference
-# CPU-only hardware (llama3.2:3b): plain chat ~64s, Ship 30 essay ~78-105s,
-# HTML artifact ~121s+ (its system prompt + expected output are the largest
-# of the three skills). A 60s timeout reliably failed real requests; even
-# 120s intermittently timed out the HTML artifact path specifically.
+# ENGINEERING DECISION (not an accidental limitation): this is a SOFT
+# wall-clock generation budget, not a hard request timeout. app/llm/router.py
+# and app/llm/ollama_client.py stream the response token-by-token and, if
+# this budget is spent before the model finishes, return whatever coherent
+# content has been generated so far (trimmed to a clean sentence boundary)
+# rather than discarding it. A locally-generated response -- especially the
+# Ship 30 for 30 essay, whose IDEAL target is ~1,250 words -- may therefore
+# come back shorter than that target on CPU-only hardware. This is
+# intentional: within this budget, a complete, coherent, grounded response
+# takes priority over forcing an exact word count. See app/skills/ship30.py
+# for how the prompt reflects this same priority order.
 #
-# Re-measured later, on a different machine, after its GPU/CUDA path turned
-# out to be broken (a driver-level crash, not a code issue -- see
-# docs/architecture.md) and Ollama fell back to CPU-only inference there:
-# Ship 30 essay measured 198.6s and HTML artifact 180.5s end-to-end, both
-# above the previous 180s value. CPU-only throughput varies meaningfully by
-# machine, so 300s was chosen for real headroom above the slowest measurement
-# actually observed, not the fastest; tune via this env var for slower/faster
-# hardware. This value must also be forwarded through docker-compose.yml's
-# backend environment block, not just set here -- it was previously missing
-# there, which meant Docker deployments silently ignored whatever was
-# configured and always used this hardcoded fallback.
-OLLAMA_TIMEOUT_SECONDS = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "300"))
+# Chosen deliberately at 120s for a reproducible local demo, even though
+# earlier live measurement on this project's own reference hardware showed
+# full-length generation taking meaningfully longer (Ship 30 essay ~193-273s,
+# HTML artifact ~121-198s, depending on target length and CPU-only
+# throughput -- see agent_transcripts/09 and agent_transcripts/13 for the
+# actual measurements this number is based on). On slower hardware, expect
+# more requests to return a shorter-than-ideal response, or -- once the
+# response is too short to be useful at all -- an actionable timeout error,
+# rather than the ideal ~1,250-word essay every time. A configured
+# OPENAI_API_KEY (see below) gives the same request a much larger
+# effective headroom without raising this value, since cloud inference isn't
+# bound by this machine's CPU throughput. This value must also be forwarded
+# through docker-compose.yml's backend environment block, not just set here
+# -- it was previously missing there, which meant Docker deployments
+# silently ignored whatever was configured and always used a hardcoded
+# fallback.
+OLLAMA_TIMEOUT_SECONDS = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "120"))
 FORCE_LLM_PROVIDER = os.getenv("FORCE_LLM_PROVIDER", "").strip().lower() or None
+
+# Ollama's per-model default context window (4096 for llama3.2:3b) has to
+# hold BOTH the retrieved transcript context (up to 6 chunks x 2500 chars for
+# the Ship 30 essay -- see app/skills/ship30.py) AND the generated output.
+# With no explicit options, the essay was observed truncating around ~650
+# words instead of the assignment's ~1,250-word target, because there wasn't
+# enough context budget left for the full output. num_ctx gives headroom for
+# input+output together; num_predict caps how many tokens the model is
+# allowed to generate (comfortably above the ~1,670 tokens a 1,250-word essay
+# needs, with room for the longer HTML-artifact skill too). Raising these
+# increases generation time for the *longer* output specifically -- that's
+# unavoidable, not a regression -- so re-measure OLLAMA_TIMEOUT_SECONDS after
+# changing them.
+OLLAMA_NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "8192"))
+OLLAMA_NUM_PREDICT = int(os.getenv("OLLAMA_NUM_PREDICT", "3000"))
 
 # Cosine-similarity floor for the retriever (app/rag/retriever.py). Chunks
 # scoring below this are treated as noise, not evidence -- this is what lets

@@ -140,14 +140,18 @@ agent layer, so both paths produce the same artifact shape.
 
 ## Model routing / dual-provider design
 
-`app/llm/ollama_client.py` and `app/llm/openai_client.py` share a consistent
-`generate(messages, system_prompt)` interface. `app/llm/router.py` is the
-single place fallback logic lives: it calls Ollama first (satisfying "local
-model required for the demo"), and on any failure (timeout, connection error),
-logs a warning and retries against OpenAI — used identically by every
-generation path (`rag/generator.py`, `skills/ship30.py`,
-`skills/html_artifact.py`), so the fallback behavior is consistent everywhere
-an answer is generated.
+`app/llm/openai_client.py` generates in one buffered call.
+`app/llm/ollama_client.py` streams instead, because the local path runs
+under a *soft* generation budget rather than a hard timeout (see the
+sub-section below). `app/llm/router.py` is the single place fallback logic
+lives: it calls Ollama first (satisfying "local model required for the
+demo"), and on an outright failure (connection error, or a stall-guard
+timeout with no output at all), logs a warning and retries against OpenAI —
+used identically by every generation path (`rag/generator.py`,
+`skills/ship30.py`, `skills/html_artifact.py`), so the fallback behavior is
+consistent everywhere an answer is generated. A soft-deadline cutoff that
+still produced a useful amount of content is *not* treated as a failure —
+see below.
 
 Two ways to override the default Ollama-first behavior:
 - `FORCE_LLM_PROVIDER=openai` (env var, deployment-wide) bypasses Ollama
@@ -158,6 +162,81 @@ Two ways to override the default Ollama-first behavior:
   `FORCE_LLM_PROVIDER` for that request; requesting `"ollama"` explicitly
   fails loudly on error rather than silently falling back to OpenAI, since
   the caller asked for a specific provider.
+
+### Ship 30 for 30 length vs. local-model latency (soft generation deadline)
+
+**Content target:** `app/skills/ship30.py`'s system prompt targets an
+approximately 1,240-1,250-word essay as its *ideal* content length. This is
+unchanged from the assignment's brief.
+
+**Runtime constraint:** the mandatory demo path runs this generation on
+Ollama, CPU-bound. Live, end-to-end measurement against this project's own
+API (not a synthetic benchmark) put a full-length Ship 30 essay well past a
+minute and, on this reference hardware, into the 190-270s range depending on
+how much the prompt pushed for length — see `agent_transcripts/09` and
+`agent_transcripts/13`. A fixed target that ignores this would make the
+mandatory local demo unpredictably slow, or require an unrealistically long
+timeout to avoid failing outright.
+
+**Engineering decision:** `OLLAMA_TIMEOUT_SECONDS` (default `120`) is a
+**soft wall-clock generation budget**, not a hard request timeout:
+
+1. `OllamaClient.generate()` (`app/llm/ollama_client.py`) sends `stream:
+   true` to Ollama's `/api/chat` and reads the response token-by-token,
+   accumulating content as it arrives.
+2. The wall-clock budget is enforced with `asyncio.wait_for` wrapped around
+   the entire read (not a per-chunk `httpx` read timeout — an earlier
+   version tried that and it misfired during Ollama's prompt-processing
+   phase, before any token had streamed back at all, which can itself take
+   a long time on CPU for a large RAG context and looks identical to a
+   stall from a per-chunk timeout's point of view; `asyncio.wait_for`
+   measures true total elapsed time regardless of which phase it's in — see
+   `agent_transcripts/13` for the live failure this replaced). If the model
+   finishes (`done: true`) before the deadline, the full response is
+   returned normally.
+3. If the deadline is reached first, the read is cancelled — later tokens
+   are never requested or parsed — and whatever content has accumulated so
+   far (preserved across the cancellation) is trimmed back to the last
+   clean sentence ending and returned, flagged internally as a deadline
+   cutoff (`hit_deadline=True`). This is different from a hard `httpx`
+   timeout on a buffered (`stream: false`) request, which would raise an
+   exception and discard everything generated so far — the whole point of
+   streaming here is to not throw away a mostly-good response just because
+   it ran a little long.
+4. The underlying `httpx` timeout itself is set deliberately generous
+   (`timeout_seconds + 60s`) — it's a last-resort backstop against a
+   connection that never sends anything at all, not the actual budget
+   enforcement mechanism (that's `asyncio.wait_for`, above).
+5. `app/llm/router.py` then decides what a deadline cutoff means: if the
+   accumulated content is substantial (currently, at least 60 words), it's
+   returned as a normal successful `"ollama"` response — shorter than the
+   ~1,250-word ideal, but complete and useful. If the cutoff happened so
+   early that there's too little content to be useful at all, it's treated
+   like any other failure: retried against OpenAI if configured, or raised
+   as a `GenerationTimeoutError` with a clean, actionable message (mapped to
+   HTTP `504` by the API layer) — never a raw stack trace.
+
+The prompt itself (`SHIP30_SYSTEM_PROMPT`) is written to match this
+priority order explicitly: groundedness and factual accuracy first,
+relevance, coherent narrative, and useful takeaways next, then structure and
+readability, with reasonable length and exact word-count adherence
+deliberately last and explicitly *not* worth padding for. **A
+shorter-than-ideal local essay is accepted, intended behavior — not a
+defect** — quality and groundedness within the runtime budget outrank
+hitting an exact word count.
+
+**Cloud path is an optional performance/length enhancement, not a
+requirement:** when a supported cloud provider (OpenAI, via
+`OPENAI_API_KEY`) is configured with valid, funded credentials, the same
+`generate_with_fallback` workflow runs through `OpenAIClient` instead,
+which isn't bound by this machine's CPU throughput — giving materially more
+practical headroom to reach the full ~1,250-word target on every request.
+This repo's own `OPENAI_API_KEY` is present but not currently backed by a
+funded account (see the README's Status note); the cloud code path is
+implemented and was verified reaching OpenAI's real API on a forced-fallback
+test, but a real successful long-form cloud generation has not been observed
+end-to-end. The mandatory local Ollama path does not depend on this in any
+way.
 
 ## Agent layer (Claude Agent SDK)
 
@@ -274,9 +353,12 @@ multiple zombie `ollama.exe` processes stacked up. The fix was host-level,
 not code-level: restart Ollama with `CUDA_VISIBLE_DEVICES=-1` (or
 `OLLAMA_LLM_LIBRARY=cpu`) to force CPU-only inference, bypassing the broken
 CUDA path. CPU-only inference is slower and pushed real generation times for
-the longer skills above the previous 180s timeout (see
-`OLLAMA_TIMEOUT_SECONDS` below) but is otherwise fully functional and was
-verified end-to-end through the real running app. If Ollama appears
+the longer skills well above the current 120s soft generation budget (see
+`OLLAMA_TIMEOUT_SECONDS` above and "Ship 30 for 30 length vs. local-model
+latency") but is otherwise fully functional and was verified end-to-end
+through the real running app -- requests now return a shorter, trimmed
+response rather than failing outright when that budget is exceeded. If
+Ollama appears
 unresponsive, check `ollama ps` for zombie processes and the Ollama app's
 own `server.log` for `CUDA error` / `GPU discovery watchdog timed out`
 before assuming it's an application bug.
@@ -293,7 +375,14 @@ before assuming it's an application bug.
   generation in separate try/except blocks, returning a `502` with an
   actionable message ("Check DB connection" vs. "Check Ollama/API is
   running") rather than a raw stack trace.
+- A local generation that exceeds the 120s soft budget with too little
+  content to be useful (see the sub-section above) raises the specific
+  `GenerationTimeoutError`, which all three endpoints catch separately from
+  the generic case and map to a `504` with a clean, specific message
+  ("Local generation exceeded the 120-second runtime limit...") instead of
+  the generic `502` used for other generation failures.
 - Empty questions/messages/topics are rejected with a `400` before any DB or
   model call.
-- The Ollama→OpenAI fallback means a stopped or slow local model degrades to a
-  working cloud answer rather than failing the request outright.
+- The Ollama→OpenAI fallback means a stopped local model, or a soft-deadline
+  cutoff that produced too little content, degrades to a working cloud
+  answer (when configured) rather than failing the request outright.

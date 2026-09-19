@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session as DbSession
 from app.agent.orchestrator import classify_intent
 from app.config import RAG_MIN_SIMILARITY
 from app.database import get_db
+from app.llm.router import GenerationTimeoutError
 from app.models.db_models import ChatSession, ChatMessage
 from app.models.schemas import Artifact, ChatRequest, ChatResponse, Source
 from app.rag.generator import NOT_GROUNDED_MESSAGE, generate_answer
@@ -120,6 +121,9 @@ async def chat(request: ChatRequest, db: DbSession = Depends(get_db)):
 
     except HTTPException:
         raise
+    except GenerationTimeoutError as exc:
+        logger.warning("Generation timed out: %s", exc)
+        raise HTTPException(status_code=504, detail=str(exc)) from exc
     except Exception as exc:
         logger.exception("Generation failed")
         raise HTTPException(

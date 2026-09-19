@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session as DbSession
 
 from app.config import RAG_MIN_SIMILARITY
 from app.database import get_db
+from app.llm.router import GenerationTimeoutError
 from app.models.db_models import ChatSession, ChatMessage
 from app.models.schemas import Artifact, ArtifactRequest, ArtifactResponse, Source
 from app.rag.generator import NOT_GROUNDED_MESSAGE
@@ -63,6 +64,9 @@ async def create_html_artifact(request: ArtifactRequest, db: DbSession = Depends
 
     try:
         html, provider = await generate_html_artifact(topic, chunks, force_provider=request.provider)
+    except GenerationTimeoutError as exc:
+        logger.warning("Artifact generation timed out: %s", exc)
+        raise HTTPException(status_code=504, detail=str(exc)) from exc
     except Exception as exc:
         logger.exception("HTML artifact generation failed")
         raise HTTPException(
