@@ -23,15 +23,20 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    # DATABASE_URL intentionally NOT set here -- it comes from backend/.env
-    # via env_file below, so the backend targets whatever database
-    # backend/.env points at (Supabase, as of this migration) without ever
-    # putting the connection string/password into this tracked file. The
-    # `db` service above stays defined and running for local reproducibility;
-    # nothing here deletes or requires it -- it's simply no longer what the
-    # backend connects to.
-    env_file: ./backend/.env
     environment:
+      # Defaults to the bundled local `db` service so a fresh clone works
+      # with zero extra files (docker compose up --build, nothing else) --
+      # this is the "one-command startup" path. `env_file: ./backend/.env`
+      # was tried here for a while to point this specific machine's backend
+      # at Supabase, but it hard-fails `docker compose` entirely (a required
+      # env_file that doesn't exist is a compose-level error, not an app-level
+      # one) for anyone who hasn't created backend/.env -- which is everyone
+      # on a fresh clone, since it's gitignored. Override DATABASE_URL via a
+      # real shell/CI env var, or a git-ignored root .env (compose
+      # auto-loads one next to this file for substitution -- see the
+      # project's own root .env for this machine's Supabase override) --
+      # never by hardcoding a real connection string/password here.
+      DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:postgres@db:5432/lenny}
       # Ollama is documented as host-run (not containerized): a local LLM
       # demo assumes the evaluator already has `ollama serve` running on
       # their machine. host.docker.internal resolves to the host from inside
