@@ -1,6 +1,7 @@
 import logging
 
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 from app.config import DATABASE_URL
@@ -39,20 +40,40 @@ def ensure_schema():
     # ChatMessage on Base.metadata before create_all() runs.
     from app.models import db_models  # noqa: F401
 
-    with engine.begin() as conn:
-        try:
-            conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-            conn.execute(text("CREATE EXTENSION IF NOT EXISTS pgcrypto"))
-        except Exception:
-            # Managed Postgres (e.g. some Supabase plans) may already have
-            # these enabled and restrict CREATE EXTENSION for the app's role.
-            # Don't fail startup over it -- log and let create_all proceed;
-            # it will fail loudly and specifically if the extension truly
-            # isn't available.
-            logger.warning(
-                "Could not CREATE EXTENSION vector/pgcrypto (may already be "
-                "enabled, or the DB role lacks privileges). Continuing."
-            )
+    # This is the first point `ensure_schema()` actually opens a connection --
+    # if DATABASE_URL is unreachable (wrong host/port, DB not running, bad
+    # credentials), `engine.begin()` itself raises here, before the inner
+    # try/except below ever runs. The behavior on failure is deliberately
+    # fail-fast (see this function's docstring) -- this wrapper only makes
+    # the failure's *presentation* clear (a one-line, actionable summary
+    # naming the cause) instead of a bare SQLAlchemy traceback being the only
+    # explanation a client engineer gets. It re-raises the original
+    # exception unchanged, so the full technical traceback for real
+    # debugging is still there, right after the summary.
+    try:
+        with engine.begin() as conn:
+            try:
+                conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+                conn.execute(text("CREATE EXTENSION IF NOT EXISTS pgcrypto"))
+            except Exception:
+                # Managed Postgres (e.g. some Supabase plans) may already have
+                # these enabled and restrict CREATE EXTENSION for the app's role.
+                # Don't fail startup over it -- log and let create_all proceed;
+                # it will fail loudly and specifically if the extension truly
+                # isn't available.
+                logger.warning(
+                    "Could not CREATE EXTENSION vector/pgcrypto (may already be "
+                    "enabled, or the DB role lacks privileges). Continuing."
+                )
+    except OperationalError as exc:
+        logger.error(
+            "Cannot connect to the database at startup. Check that "
+            "DATABASE_URL is correct and the database is actually reachable "
+            "(host, port, credentials, and that Postgres itself is running) "
+            "-- see the traceback below for the underlying driver error: %s",
+            exc,
+        )
+        raise
 
     Base.metadata.create_all(bind=engine)
 

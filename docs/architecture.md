@@ -365,8 +365,18 @@ before assuming it's an application bug.
 
 ## Observability & resilience
 
-- Structured logging (`lenny-assistant` logger) captures retrieval and
-  generation failures with full tracebacks.
+- A named, leveled logger (`"lenny-assistant"`) captures retrieval and
+  generation failures with full server-side tracebacks (`logger.exception`)
+  before every sanitized client-facing error. **Honest scope note:** this is
+  plain-text, per-component logging, not JSON-structured logs with a
+  per-request correlation ID -- you can find *that* a request failed and
+  which component (retrieval/routing/generation/sanitizer) it failed in, but
+  not mechanically grep one request's full path across log lines the way a
+  request-ID-tagged JSON log would allow. Deliberately not built for this
+  engagement's scope: `/api/health`'s independent per-component status plus
+  this logging was judged "enough visibility to diagnose" (the requirement's
+  actual wording) without the added complexity of a logging middleware and
+  formatter change.
 - `/api/health` independently reports DB, Ollama, and embedding-model status,
   plus an overall rollup: `healthy` (all three ok), `degraded` (e.g. Ollama
   down but `OPENAI_API_KEY` configured, so the app still answers), or
@@ -381,8 +391,122 @@ before assuming it's an application bug.
   the generic case and map to a `504` with a clean, specific message
   ("Local generation exceeded the 120-second runtime limit...") instead of
   the generic `502` used for other generation failures.
+- The HTML artifact sanitizer (`app/skills/html_artifact.py`) logs a warning
+  -- category and count only, never the raw stripped markup -- whenever it
+  actually removes something (a `<script>` tag, an inline event handler, a
+  `javascript:` URL). A model that tried to inject a script now leaves a
+  visible trail instead of silently degrading into a safe-looking page with
+  no record anything was blocked.
+- `ensure_schema()` (`app/database.py`) wraps only its first DB connection
+  attempt: an unreachable `DATABASE_URL` at startup logs one clear,
+  actionable line ("Cannot connect to the database at startup... check
+  DATABASE_URL...") before re-raising the original `OperationalError`
+  unchanged, so the real driver-level traceback is still there for real
+  debugging, right after the summary. The fail-fast behavior itself
+  (`ensure_schema()` runs at import time) is unchanged and remains
+  deliberate -- this only makes the failure's *presentation* clear instead
+  of a bare SQLAlchemy traceback being the only explanation.
 - Empty questions/messages/topics are rejected with a `400` before any DB or
   model call.
 - The Ollama→OpenAI fallback means a stopped local model, or a soft-deadline
   cutoff that produced too little content, degrades to a working cloud
   answer (when configured) rather than failing the request outright.
+
+## Extending the system
+
+Everything above documents the system as built. This section is the missing
+other half: how a client engineer would build on it.
+
+### Adding a new skill
+
+Ship 30 (`app/skills/ship30.py`) and the HTML artifact (`app/skills/html_artifact.py`)
+are both built to the same shape -- copy whichever is structurally closer to
+what you're adding:
+
+1. **A system prompt constant** describing the output's structural
+   requirements (what Ship 30/HTML artifact each do at the top of their
+   respective files).
+2. **A context builder** (`build_ship30_context()` / `build_context()`) that
+   turns the retriever's `list[dict]` chunks into a prompt-ready string,
+   tagged per-source so the model can attribute claims.
+3. **One async function** (`generate_ship30_essay()` /
+   `generate_html_artifact()`) that builds the user prompt from the topic +
+   context and calls `generate_with_fallback(messages=..., system_prompt=...,
+   force_provider=...)` -- this one call is what gets you the Ollama-first,
+   OpenAI-fallback, soft-deadline-timeout behavior for free, identically to
+   every other generation path. Returns `(content, provider)`.
+
+Then wire it in (both steps are required -- a skill with only the first is
+unreachable):
+
+- **Intent routing** (`app/agent/orchestrator.py`): add the new intent name
+  to `VALID_INTENTS` (line 81), describe it in the Agent SDK's classification
+  prompt, and add a keyword list for `_classify_via_heuristics()`'s offline
+  fallback (mirror `_ESSAY_KEYWORDS`/`_HTML_KEYWORDS`) -- routing must work
+  identically whether or not the cloud-based SDK is reachable.
+- **Dispatch** (`app/api/chat.py`): add an `elif routing.intent == "<new>":`
+  branch calling your new function, following the existing `essay`/
+  `html_artifact` branches' pattern (retrieve chunks, check for empty
+  results, call the skill, build the `Artifact`/answer response).
+- **Optional dedicated endpoint**: `app/api/essay.py` and
+  `app/api/artifact.py` both exist so the frontend can offer an explicit
+  button/action in addition to natural-language chat routing -- add a third
+  if your skill needs the same treatment.
+
+### Swapping the local model
+
+Set `OLLAMA_MODEL` (after `ollama pull <model>` on the host) -- no code
+change needed for the model itself. Two things to re-check afterward, not
+assume:
+
+- **`OLLAMA_NUM_CTX`** (default `8192`): this is a ceiling this app requests
+  from Ollama, not a property of the model. If the new model's own native
+  context window is smaller than whatever you have this set to, either
+  Ollama will clamp it or generation quality/behavior may degrade
+  unpredictably near that limit -- check the model's actual supported
+  context window and set `OLLAMA_NUM_CTX` to something it genuinely
+  supports, don't just leave the default.
+- **Generation speed**, if still targeting the mandatory local-only CPU
+  demo: a larger model changes the real wall-clock throughput this whole
+  soft-deadline design (see above) was measured against. Re-measure rather
+  than assume the 120s budget is still well-calibrated -- a much larger
+  model may need `OLLAMA_TIMEOUT_SECONDS` raised, or may simply not fit the
+  "works comfortably on your machine" constraint the assignment asks for.
+
+**What this does *not* affect:** the embedding model (`all-MiniLM-L6-v2`,
+`app/rag/embeddings.py`) is a separate, unrelated local model used only for
+retrieval, not generation -- swapping `OLLAMA_MODEL` has no effect on
+retrieval quality or the ingested corpus.
+
+### Pointing at a different transcript corpus
+
+`backend/scripts/ingest.py` makes several assumptions worth knowing before
+pointing it at different source material:
+
+- **Location is hardcoded**, not env-configurable:
+  `TRANSCRIPTS_DIR` resolves to `<repo root>/lennys-podcast-transcripts/episodes`
+  relative to the script's own file location. Pointing at a different corpus
+  means either replacing that directory's contents or editing this path.
+- **File format**: every file under that directory (searched recursively,
+  `rglob("*.md")`) is expected to be Markdown with an optional YAML
+  frontmatter block (`---\ntitle: ...\nguest: ...\nyoutube_url: ...\n---`)
+  at the top. Missing/malformed frontmatter doesn't fail ingestion -- it
+  falls back to the parent folder's name as the title, with no guest/URL.
+- **Turn-aware chunking is format-dependent, with a safe fallback**: real
+  per-chunk timestamps and speaker attribution require the body to use this
+  corpus's `Speaker (HH:MM:SS):` turn-header convention
+  (`parse_turns()`/`TURN_HEADER_RE`). A transcript that doesn't use this
+  format still ingests fine -- it falls back to plain ~3000-character
+  chunking with no timestamp and the frontmatter's `guest` as a blanket
+  speaker for every chunk from that file (see `build_chunks()`).
+- **`episode_title` is the idempotency key**: re-running `ingest.py` skips
+  any title already present in `transcript_chunks` (or replaces it with
+  `--force`). A different corpus needs genuinely unique titles per episode,
+  or episodes will silently collide.
+- **Embeddings are dimension-locked to the schema**: chunks are embedded
+  locally with `all-MiniLM-L6-v2` (384 dimensions), matching
+  `TranscriptChunk.embedding`'s `Vector(384)` column
+  (`app/models/db_models.py`). Swapping the embedding model to one with a
+  different output dimension requires updating that column definition (and
+  the HNSW index) and re-ingesting everything -- embeddings from two
+  different models are not comparable/mixable in the same column.

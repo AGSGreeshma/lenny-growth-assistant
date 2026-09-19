@@ -16,9 +16,12 @@ the content "safe" in an absolute sense -- see architecture.md's security
 section for the actual boundary this provides.
 """
 
+import logging
 import re
 
 from app.llm.router import generate_with_fallback
+
+logger = logging.getLogger("lenny-assistant")
 
 HTML_ARTIFACT_SYSTEM_PROMPT = """You are a content designer who turns grounded \
 product/growth research into a single, self-contained HTML page.
@@ -70,12 +73,31 @@ def sanitize_html(raw_html: str) -> str:
     boundary -- the primary boundary is the sandboxed iframe the frontend
     renders this content in (no `allow-same-origin`, so even HTML that slips
     past this pass cannot read the parent page's cookies/storage or escape
-    the iframe). See docs/architecture.md for the full threat model."""
+    the iframe). See docs/architecture.md for the full threat model.
+
+    Logs a warning (category + count only, never the raw stripped markup --
+    generated HTML can be large and this is a log line, not a quarantine
+    store) whenever it actually removes something, so a model that tried to
+    inject a script leaves a visible trail instead of silently degrading
+    into a safe-looking page with no record anything was blocked."""
     html = _CODE_FENCE_RE.sub("", raw_html.strip())
-    html = _SCRIPT_TAG_RE.sub("", html)
-    html = _SCRIPT_SELF_CLOSE_RE.sub("", html)
-    html = _EVENT_HANDLER_ATTR_RE.sub("", html)
-    html = _JAVASCRIPT_URL_RE.sub(lambda m: f'{m.group(1)}="#"', html)
+
+    html, script_tag_hits = _SCRIPT_TAG_RE.subn("", html)
+    html, script_self_close_hits = _SCRIPT_SELF_CLOSE_RE.subn("", html)
+    html, event_handler_hits = _EVENT_HANDLER_ATTR_RE.subn("", html)
+    html, js_url_hits = _JAVASCRIPT_URL_RE.subn(lambda m: f'{m.group(1)}="#"', html)
+
+    removed = {
+        "script_tags": script_tag_hits + script_self_close_hits,
+        "event_handlers": event_handler_hits,
+        "javascript_urls": js_url_hits,
+    }
+    if any(removed.values()):
+        logger.warning(
+            "HTML artifact sanitizer stripped unsafe content -- %s",
+            ", ".join(f"{name}={count}" for name, count in removed.items() if count),
+        )
+
     return html.strip()
 
 

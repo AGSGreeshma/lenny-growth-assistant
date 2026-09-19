@@ -18,11 +18,16 @@ HTML one-pager.
 > **Known limitation:** the OpenAI cloud-fallback integration is code-complete
 > and was verified reaching OpenAI's real API (a forced Ollama failure
 > correctly triggered the fallback and hit OpenAI's servers) — but the
-> configured OpenAI account currently has zero credits, so it has not
-> produced a real successful cloud-generated answer end-to-end. This does
-> not affect the mandatory local Ollama demo path, which is unaffected and
-> fully verified. Fixing this requires adding credits to that account, which
-> is out of scope for this engagement.
+> currently-configured `OPENAI_API_KEY` is rejected with a real `401
+> Incorrect API key provided` from OpenAI's own API (confirmed via live
+> logs), not a "zero credits" quota error as earlier documentation here
+> assumed — so it has not produced a real successful cloud-generated answer
+> end-to-end. Practically, this means the cloud fallback is currently
+> non-functional: if Ollama fails or its soft-deadline cutoff produces too
+> little content, the request fails outright instead of degrading to
+> OpenAI. This does not affect the mandatory local Ollama demo path, which
+> is unaffected and fully verified. Fixing this requires a valid, funded
+> OpenAI key, which is out of scope for this engagement.
 >
 > **Deliberate trade-off:** the Ship 30 for 30 skill targets ~1,240–1,250
 > words as its ideal content length, but the local Ollama path runs under a
@@ -36,7 +41,9 @@ HTML one-pager.
 ## Architecture Overview
 
 See [`docs/architecture.md`](docs/architecture.md) for the full architecture
-and implementation details, [`docs/PRD.md`](docs/PRD.md) for product
+and implementation details (including an "Extending the system" section --
+adding a new skill, swapping the local model, pointing at a different
+transcript corpus), [`docs/PRD.md`](docs/PRD.md) for product
 scope, assumptions, and trade-offs, [`docs/design.md`](docs/design.md) for
 UI/UX principles, interaction states, and accessibility decisions,
 [`docs/manual-test-plan.md`](docs/manual-test-plan.md) for a short
@@ -136,7 +143,9 @@ which router made the classification. Full detail, including the
 
 **How do I run it in Docker?**
 `docker compose up --build` from the repo root (with `ollama serve` already
-running on the host). See "Option A: Docker Compose" below.
+running on the host) — **plus a one-time transcript ingestion step**, or
+every question returns "not grounded." See "Option A: Docker Compose"
+below for the full 3-step sequence (Ollama → Docker Compose → ingest).
 
 **How do I run the mandatory Ollama-only demo?**
 Unset/omit `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` (or set
@@ -211,12 +220,21 @@ chosen deliberately, not guessed.
 
 ## Option A: Docker Compose (recommended)
 
+**This is three steps, not one** — `docker compose up` alone gets you a
+running app that answers "not grounded" to everything, because the
+transcript corpus hasn't been ingested yet. Steps 1 and 3 happen outside
+Docker; only step 2 is `docker compose`.
+
+### 1. Start Ollama on the host (not in Docker)
+
 ```bash
-# 1. Make sure Ollama is running on the host and has a model pulled:
 ollama pull llama3.2:3b
 ollama serve
+```
 
-# 2. From the repo root:
+### 2. Start the app
+
+```bash
 docker compose up --build
 ```
 
@@ -233,10 +251,42 @@ Override defaults with environment variables before `docker compose up`, e.g.:
 OPENAI_API_KEY=sk-... AGENT_SDK_ENABLED=true ANTHROPIC_API_KEY=sk-ant-... docker compose up --build
 ```
 
-You still need to ingest the transcripts into the `db` service once — see
-"Ingest the transcripts" below, pointing `DATABASE_URL` at
-`postgresql://postgres:postgres@localhost:5432/lenny` (the compose service's
-published port).
+At this point `/api/health` reports healthy and the UI loads — but every
+question still returns "not grounded." That's expected; step 3 is what
+fixes it.
+
+### 3. Ingest the transcripts (once)
+
+The app itself needs no Python on your machine — it all runs in Docker.
+This one step is the exception: ingestion embeds transcripts locally and
+needs a Python environment with the backend's own dependencies to do it,
+even though it's writing into the Dockerized database.
+
+```bash
+cd backend
+python -m venv venv
+# Windows:
+venv\Scripts\activate
+# macOS/Linux:
+source venv/bin/activate
+
+pip install -r requirements.txt
+```
+
+```bash
+# Still in backend/, venv active. Point DATABASE_URL at the Docker Compose
+# db service's published port (localhost:5432, not the internal "db" hostname):
+# Windows (PowerShell):
+$env:DATABASE_URL="postgresql://postgres:postgres@localhost:5432/lenny"; python scripts/ingest.py
+# macOS/Linux:
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/lenny python scripts/ingest.py
+```
+
+This takes a few minutes (local embedding of ~300 episodes) and is safe to
+re-run — see "Ingest the transcripts" under Option B below for exactly what
+it does (chunking, timestamps, the `--force` re-embed flag). **Until this
+finishes, "not grounded" on every question is expected, not a bug** — see
+Troubleshooting.
 
 ---
 
@@ -305,16 +355,14 @@ python scripts/ingest.py --force
 ```bash
 cd frontend
 npm install
-cp .env.example .env   # if present; otherwise set VITE_API_URL as below
+cp .env.example .env
 npm run dev
 ```
 
-By default the frontend expects the backend at `http://127.0.0.1:8000`. To
-point it elsewhere, set `VITE_API_URL` (e.g. in `frontend/.env`):
-
-```
-VITE_API_URL=http://127.0.0.1:8000
-```
+The default in `.env.example` (`VITE_API_URL=http://127.0.0.1:8000`) matches
+this manual setup as-is — you only need to edit `frontend/.env` if your
+backend is reachable somewhere other than `127.0.0.1:8000` (see
+`frontend/.env.example`'s comment for the Docker-network caveat).
 
 Open `http://localhost:5173`.
 
@@ -434,7 +482,7 @@ relevant:
 | `OPENAI_API_KEY` | Cloud fallback; blank = fully offline (fails if Ollama also fails) |
 | `FORCE_LLM_PROVIDER` | Deployment-wide provider override (`openai` or blank) |
 | `RAG_MIN_SIMILARITY` | Cosine-similarity floor for "grounded" (default `0.30`) |
-| `AGENT_SDK_ENABLED` | Enable/disable the Claude Agent SDK routing attempt |
+| `AGENT_SDK_ENABLED` | Enable/disable the Claude Agent SDK routing attempt. **Default differs by setup**: `true` for manual/`config.py` (attempts the real SDK, degrading gracefully if `ANTHROPIC_API_KEY` is absent), but `false` in `docker-compose.yml` — Docker Compose defaults to the local heuristic router only, so `docker compose up` with no overrides is a guaranteed fully-offline demo with zero Anthropic dependency. Override with `AGENT_SDK_ENABLED=true` before `docker compose up` to opt into the real SDK there too. |
 | `ANTHROPIC_API_KEY` | Required only if `AGENT_SDK_ENABLED=true` |
 | `CORS_ORIGINS` | Extra allowed frontend origins beyond localhost dev ports |
 

@@ -52,6 +52,30 @@ def test_leaves_ordinary_markup_and_inline_css_alone():
     assert out == html.strip()
 
 
+def test_logs_warning_with_counts_when_something_is_stripped(caplog):
+    """Observability requirement: a model that tried to inject a script must
+    leave a visible trail, not silently degrade into a safe-looking page
+    with no record anything was blocked."""
+    html = '<button onclick="doBad()">go</button><script>alert(1)</script>'
+    with caplog.at_level("WARNING", logger="lenny-assistant"):
+        sanitize_html(html)
+    assert len(caplog.records) == 1
+    message = caplog.records[0].message
+    assert "script_tags=1" in message
+    assert "event_handlers=1" in message
+    # Never log the actual stripped markup, just what kind and how many.
+    assert "onclick" not in message
+    assert "doBad" not in message
+    assert "alert(1)" not in message
+
+
+def test_no_log_when_nothing_needs_stripping(caplog):
+    html = "<html><body><h1>Title</h1><p>Clean content.</p></body></html>"
+    with caplog.at_level("WARNING", logger="lenny-assistant"):
+        sanitize_html(html)
+    assert len(caplog.records) == 0
+
+
 def test_combined_payload_is_fully_neutralized():
     payload = """<html><head><style>body{color:red}</style></head>
 <body onload="steal()">
