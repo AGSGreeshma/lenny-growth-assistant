@@ -37,7 +37,10 @@ HTML one-pager.
 
 See [`docs/architecture.md`](docs/architecture.md) for the full architecture
 and implementation details, [`docs/PRD.md`](docs/PRD.md) for product
-scope, assumptions, and trade-offs, and
+scope, assumptions, and trade-offs, [`docs/design.md`](docs/design.md) for
+UI/UX principles, interaction states, and accessibility decisions,
+[`docs/manual-test-plan.md`](docs/manual-test-plan.md) for a short
+walk-through UI test plan, and
 [`FINAL_REQUIREMENTS_AUDIT.md`](FINAL_REQUIREMENTS_AUDIT.md) for a
 requirement-by-requirement audit with the evidence behind each verdict.
 
@@ -336,12 +339,18 @@ Two tiers of tests:
   database:
   ```bash
   docker compose up -d db
-  # from repo root, or point TEST_DATABASE_URL at any disposable Postgres+pgvector instance
-  TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/lenny pytest backend/tests -v
+  docker exec -it lenny-growth-assistant-db-1 psql -U postgres -c "CREATE DATABASE lenny_test;"
+  docker exec -it lenny-growth-assistant-db-1 psql -U postgres -d lenny_test -c "CREATE EXTENSION IF NOT EXISTS vector; CREATE EXTENSION IF NOT EXISTS pgcrypto;"
+  TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/lenny_test pytest backend/tests -v
   ```
-  **Do not point `TEST_DATABASE_URL` at a database with real data you want to
-  keep** — the test fixtures delete all rows from every table after each
-  test. Use a disposable/local database only.
+  **Do not point `TEST_DATABASE_URL` at the same database your running app
+  uses (e.g. `.../lenny`, the default Docker Compose database name)** — the
+  test fixtures delete all rows from every table after each test, and this
+  has actually happened once during this project's own development (wiping
+  the full ingested transcript corpus; recovered by re-running
+  `scripts/ingest.py` — see `agent_transcripts/13`). Always use a genuinely
+  separate database name like `lenny_test`, as above, never the app's own
+  database.
 
   If no test database is reachable, these tests are skipped individually
   with a clear reason, rather than failing the whole suite.

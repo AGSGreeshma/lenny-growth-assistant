@@ -47,10 +47,10 @@ App
 - **Error state:** distinct, friendly copy per failure mode (network unreachable,
   4xx validation, 5xx generation failure) rather than a raw error dump — see
   `services/api.js`'s `friendlyHttpError`.
-- **Not-grounded state (planned refinement):** when `grounded: false` comes back
-  from the API, the UI should visually distinguish "I don't know" from a normal
-  answer (e.g. muted styling, no source cards) rather than rendering it identically
-  to a confident response.
+- **Not-grounded state (implemented):** when `grounded: false` comes back from
+  the API, `ChatMessage.jsx` renders a visually distinct amber-tinted card with
+  a "Not grounded" label instead of "Answer," and omits source cards entirely
+  — rather than rendering it identically to a confident response.
 
 ## 4. Responsive Behavior
 
@@ -66,17 +66,26 @@ timestamp), with a "New chat" action. Selecting a session loads its message
 history via `GET /api/sessions/{id}` and continues the conversation with full
 prior context.
 
-## 6. Planned: Artifact Viewer
+## 6. Artifact Viewer (implemented)
 
-A collapsible right-hand pane, mirroring the Claude Artifacts pattern:
+A right-hand pane (`ArtifactViewer.jsx`), mirroring the Claude Artifacts pattern:
 - Triggered when a response includes a generated Markdown/HTML artifact (e.g.
-  a Ship 30 for 30 essay).
-- Markdown renders via `react-markdown`; HTML renders inside a sandboxed
-  `<iframe>` (see architecture.md for the security model).
-- A visible badge indicates artifact type and a "Sandboxed" label, so the user
-  understands the trust boundary rather than assuming full-page access.
-- Collapses on narrow viewports to a full-screen overlay rather than a
-  fixed side-by-side pane, to preserve usability on mobile.
+  a Ship 30 for 30 essay, requested via the "Turn into essay" button or a
+  natural-language HTML/one-pager request in chat).
+- Markdown renders via the same `AnswerContent`/`react-markdown` path as chat
+  answers; HTML renders inside a sandboxed `<iframe sandbox="allow-scripts">`
+  with no `allow-same-origin` (see architecture.md for the full security
+  model).
+- A visible badge indicates artifact type ("Markdown" / "Sandboxed HTML"), so
+  the user understands the trust boundary rather than assuming full-page
+  access, plus a provider badge ("Local (Ollama)" / "Cloud (OpenAI)").
+- Closeable via a focus-visible "Close" button or the Escape key.
+- **Not yet done:** a dedicated narrow-viewport overlay treatment. The
+  component has no `fixed`/`absolute` full-screen classes for small
+  breakpoints — it renders in the same side-by-side flex row as the chat
+  column at every width (`w-full sm:w-[420px] lg:w-[480px]`), which has not
+  been visually verified on an actual narrow viewport and may crowd the chat
+  column rather than cleanly overlaying it.
 
 ## 7. Accessibility
 
