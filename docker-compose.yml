@@ -23,8 +23,15 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    # DATABASE_URL intentionally NOT set here -- it comes from backend/.env
+    # via env_file below, so the backend targets whatever database
+    # backend/.env points at (Supabase, as of this migration) without ever
+    # putting the connection string/password into this tracked file. The
+    # `db` service above stays defined and running for local reproducibility;
+    # nothing here deletes or requires it -- it's simply no longer what the
+    # backend connects to.
+    env_file: ./backend/.env
     environment:
-      DATABASE_URL: postgresql://postgres:postgres@db:5432/lenny
       # Ollama is documented as host-run (not containerized): a local LLM
       # demo assumes the evaluator already has `ollama serve` running on
       # their machine. host.docker.internal resolves to the host from inside
