@@ -3,14 +3,22 @@ from sqlalchemy.orm import Session as DbSession
 
 from app.database import get_db
 from app.models.db_models import ChatSession, ChatMessage
-from app.models.schemas import SessionCreateResponse, SessionHistoryResponse
+from app.models.schemas import (
+    SessionCreateRequest,
+    SessionCreateResponse,
+    SessionHistoryResponse,
+)
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 
 
 @router.post("", response_model=SessionCreateResponse)
-def create_session(db: DbSession = Depends(get_db)):
-    session = ChatSession()
+def create_session(
+    request: SessionCreateRequest | None = None,
+    db: DbSession = Depends(get_db),
+):
+    client_label = (request.client_label if request else None) or None
+    session = ChatSession(client_label=client_label)
     db.add(session)
     db.commit()
     db.refresh(session)
@@ -18,6 +26,7 @@ def create_session(db: DbSession = Depends(get_db)):
         session_id=session.id,
         title=session.title,
         created_at=session.created_at,
+        client_label=session.client_label,
     )
 
 

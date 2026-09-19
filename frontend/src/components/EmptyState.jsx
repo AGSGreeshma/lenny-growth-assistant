@@ -12,9 +12,9 @@ export default function EmptyState({ onSelect, disabled }) {
         <p className="text-xs font-medium uppercase tracking-[0.18em] text-moss">
           Grounded in Lenny&apos;s Podcast
         </p>
-        <h1 className="mt-3 font-display text-3xl font-semibold tracking-tight text-ink sm:text-4xl">
+        <h2 className="mt-3 font-display text-3xl font-semibold tracking-tight text-ink sm:text-4xl">
           A quieter way to think about growth.
-        </h1>
+        </h2>
         <p className="mt-4 text-base leading-relaxed text-muted">
           Ask a product, growth, startup, or leadership question. The assistant
           retrieves relevant ideas from Lenny&apos;s Podcast transcripts and

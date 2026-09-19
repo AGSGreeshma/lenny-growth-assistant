@@ -36,7 +36,13 @@ export default function Chat({
           {messages.length === 0 ? (
             <EmptyState onSelect={onExampleSelect} disabled={isLoading} />
           ) : (
-            <div className="mx-auto flex max-w-3xl flex-col gap-5 px-4 py-6 sm:px-6 sm:py-8">
+            <div
+              className="mx-auto flex max-w-3xl flex-col gap-5 px-4 py-6 sm:px-6 sm:py-8"
+              role="log"
+              aria-label="Conversation"
+              aria-live="polite"
+              aria-relevant="additions"
+            >
               {messages.map((message, index) => (
                 <ChatMessage
                   key={message.id}

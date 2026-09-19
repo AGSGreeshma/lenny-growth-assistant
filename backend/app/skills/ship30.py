@@ -47,7 +47,9 @@ Guest: {chunk.get("speaker") or chunk.get("guest") or "Unknown"}
     return "\n\n".join(parts)
 
 
-async def generate_ship30_essay(topic: str, retrieved_chunks: list[dict]) -> str:
+async def generate_ship30_essay(
+    topic: str, retrieved_chunks: list[dict], force_provider: str | None = None
+) -> tuple[str, str]:
     """Returns a Markdown-formatted Ship 30 for 30 essay grounded in the
     given transcript chunks. Raises RuntimeError if generation fails
     (propagated from generate_with_fallback, same failure mode as the main
@@ -65,4 +67,5 @@ Write the Ship 30 for 30 essay now, following all structural requirements."""
     return await generate_with_fallback(
         messages=[{"role": "user", "content": user_prompt}],
         system_prompt=SHIP30_SYSTEM_PROMPT,
+        force_provider=force_provider,
     )

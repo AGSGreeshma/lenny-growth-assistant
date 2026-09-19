@@ -45,6 +45,7 @@ export default function QuestionInput({
           onChange={(event) => onChange(event.target.value)}
           onKeyDown={handleKeyDown}
           placeholder="Ask about growth, product, startups, or leadership..."
+          aria-describedby="question-hint"
           className="max-h-40 min-h-12 flex-1 resize-none bg-transparent px-3 py-3 text-sm leading-relaxed text-ink placeholder:text-muted/80 focus:outline-none disabled:cursor-not-allowed disabled:opacity-70"
         />
         <button
@@ -55,7 +56,7 @@ export default function QuestionInput({
           Ask
         </button>
       </div>
-      <p className="mx-auto mt-2 max-w-3xl px-1 text-xs text-muted">
+      <p id="question-hint" className="mx-auto mt-2 max-w-3xl px-1 text-xs text-muted">
         Enter to send · Shift + Enter for a new line
       </p>
     </form>

@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import AnswerContent from "./AnswerContent.jsx";
 
 export default function ArtifactViewer({ artifact, onClose }) {
@@ -9,10 +9,21 @@ export default function ArtifactViewer({ artifact, onClose }) {
     return artifact.content;
   }, [isHtml, artifact]);
 
+  useEffect(() => {
+    if (!artifact) return;
+    function handleKeyDown(event) {
+      if (event.key === "Escape") onClose();
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [artifact, onClose]);
+
   if (!artifact) return null;
 
   return (
-    <div className="flex h-full w-full flex-col border-l border-line bg-cream sm:w-[420px] lg:w-[480px]">
+    <aside
+      aria-label="Generated artifact"
+      className="flex h-full w-full flex-col border-l border-line bg-cream sm:w-[420px] lg:w-[480px]">
       <div className="flex items-center justify-between border-b border-line px-4 py-3">
         <div className="min-w-0">
           <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-moss">
@@ -23,6 +34,18 @@ export default function ArtifactViewer({ artifact, onClose }) {
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          {artifact.provider ? (
+            <span
+              className="rounded-full border border-line bg-paper px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted"
+              title={
+                artifact.provider === "ollama"
+                  ? "Generated locally via Ollama"
+                  : "Generated via OpenAI (Ollama unavailable or slow)"
+              }
+            >
+              {artifact.provider === "ollama" ? "Local (Ollama)" : "Cloud (OpenAI)"}
+            </span>
+          ) : null}
           <span
             className="rounded-full border border-line bg-paper px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted"
             title={
@@ -36,7 +59,7 @@ export default function ArtifactViewer({ artifact, onClose }) {
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg border border-line bg-paper px-2 py-1 text-xs font-medium text-ink hover:border-moss/40 hover:text-moss"
+            className="rounded-lg border border-line bg-paper px-2 py-1 text-xs font-medium text-ink hover:border-moss/40 hover:text-moss focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-moss"
           >
             Close
           </button>
@@ -57,6 +80,6 @@ export default function ArtifactViewer({ artifact, onClose }) {
           </article>
         )}
       </div>
-    </div>
+    </aside>
   );
 }

@@ -1,4 +1,42 @@
-export default function Header({ onNewChat, newChatDisabled }) {
+const PROVIDER_OPTIONS = [
+  { value: null, label: "Auto" },
+  { value: "ollama", label: "Ollama" },
+  { value: "openai", label: "OpenAI" },
+];
+
+function ProviderToggle({ provider, onProviderChange }) {
+  return (
+    <div
+      role="radiogroup"
+      aria-label="LLM provider"
+      title="Choose which model generates answers: Auto tries local Ollama first and falls back to OpenAI, or pin one provider explicitly."
+      className="flex shrink-0 items-center gap-0.5 rounded-xl border border-line bg-cream p-0.5"
+    >
+      {PROVIDER_OPTIONS.map((option) => {
+        const active = option.value === provider;
+        return (
+          <button
+            key={option.label}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            onClick={() => onProviderChange(option.value)}
+            className={
+              "rounded-lg px-2.5 py-1.5 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-moss " +
+              (active
+                ? "bg-moss text-cream shadow-sm"
+                : "text-muted hover:text-ink")
+            }
+          >
+            {option.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+export default function Header({ onNewChat, newChatDisabled, provider, onProviderChange }) {
   return (
     <header className="border-b border-line bg-paper/90 backdrop-blur-sm">
       <div className="mx-auto flex max-w-5xl items-center gap-4 px-4 py-4 sm:px-6">
@@ -22,18 +60,21 @@ export default function Header({ onNewChat, newChatDisabled }) {
           </svg>
         </div>
         <div className="min-w-0 flex-1">
-          <p className="font-display text-lg font-semibold tracking-tight text-ink sm:text-xl">
+          <h1 className="font-display text-lg font-semibold tracking-tight text-ink sm:text-xl">
             Lenny Growth Assistant
-          </p>
+          </h1>
           <p className="mt-0.5 truncate text-sm text-muted">
             Ask anything about product, growth, startups, and leadership.
           </p>
         </div>
+        {onProviderChange ? (
+          <ProviderToggle provider={provider} onProviderChange={onProviderChange} />
+        ) : null}
         <button
           type="button"
           onClick={onNewChat}
           disabled={newChatDisabled}
-          className="shrink-0 rounded-xl border border-line bg-cream px-3.5 py-2 text-sm font-medium text-ink transition hover:border-moss/40 hover:text-moss disabled:cursor-not-allowed disabled:opacity-50"
+          className="shrink-0 rounded-xl border border-line bg-cream px-3.5 py-2 text-sm font-medium text-ink transition hover:border-moss/40 hover:text-moss focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-moss disabled:cursor-not-allowed disabled:opacity-50"
         >
           New chat
         </button>

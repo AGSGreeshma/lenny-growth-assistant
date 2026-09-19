@@ -26,30 +26,6 @@ async function parseJsonOrThrow(response) {
   }
 }
 
-export async function askQuestion(question) {
-  let response;
-  try {
-    response = await fetch(`${API_URL}/ask`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question }),
-    });
-  } catch {
-    throw new Error(
-      "Unable to connect to the assistant. Please make sure the backend is running."
-    );
-  }
-
-  const data = await parseJsonOrThrow(response);
-  const answer = typeof data?.answer === "string" ? data.answer.trim() : "";
-  if (!answer) {
-    throw new Error(
-      "The assistant did not return an answer. Please try asking in a different way."
-    );
-  }
-  return { answer, sources: Array.isArray(data.sources) ? data.sources : [] };
-}
-
 export async function createSession() {
   let response;
   try {
@@ -77,13 +53,17 @@ export async function getSessionHistory(sessionId) {
   return parseJsonOrThrow(response);
 }
 
-export async function sendChatMessage(sessionId, message) {
+// `provider` is an optional per-request override ("ollama" | "openai") for
+// the frontend's provider toggle -- see app/models/schemas.py's
+// ChatRequest.provider / EssayRequest.provider / ArtifactRequest.provider.
+// Undefined/null means "use the backend's normal Ollama-first fallback".
+export async function sendChatMessage(sessionId, message, provider) {
   let response;
   try {
     response = await fetch(`${API_URL}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: sessionId, message }),
+      body: JSON.stringify({ session_id: sessionId, message, provider: provider || null }),
     });
   } catch {
     throw new Error(
@@ -103,16 +83,20 @@ export async function sendChatMessage(sessionId, message) {
     answer,
     grounded: Boolean(data.grounded),
     sources: Array.isArray(data.sources) ? data.sources : [],
+    provider: data.provider,
+    intent: data.intent,
+    usedAgentSdk: Boolean(data.used_agent_sdk),
+    artifact: data.artifact || null,
   };
 }
 
-export async function generateEssay(sessionId, topic) {
+export async function generateEssay(sessionId, topic, provider) {
   let response;
   try {
     response = await fetch(`${API_URL}/api/essay`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: sessionId, topic }),
+      body: JSON.stringify({ session_id: sessionId, topic, provider: provider || null }),
     });
   } catch {
     throw new Error(
@@ -129,5 +113,6 @@ export async function generateEssay(sessionId, topic) {
     sessionId: data.session_id,
     essay,
     sources: Array.isArray(data.sources) ? data.sources : [],
+    provider: data.provider,
   };
 }

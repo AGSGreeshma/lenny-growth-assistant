@@ -1,38 +1,63 @@
-"""
-Shared dual-provider routing: try Ollama first (satisfies the "local model
-required for the demo" requirement), fall back to OpenAI on any failure
-(timeout, connection error, etc.) so a flaky local setup never blocks a
-request. Used by both the grounded-answer generator and the Ship 30 skill,
-so the fallback logic lives in exactly one place.
-"""
-
 import logging
 
-from app.config import OLLAMA_BASE_URL, OPENAI_API_KEY
+from app.config import (
+    FORCE_LLM_PROVIDER,
+    OLLAMA_BASE_URL,
+    OLLAMA_MODEL,
+    OLLAMA_TIMEOUT_SECONDS,
+    OPENAI_API_KEY,
+)
 from app.llm.ollama_client import OllamaClient
-from app.llm.openai_client import OpenAIClient
 
 logger = logging.getLogger("lenny-assistant")
-
-OLLAMA_MODEL = "llama3.2:3b"
 
 
 async def generate_with_fallback(
     messages: list[dict[str, str]],
     system_prompt: str,
-) -> str:
-    ollama = OllamaClient(base_url=OLLAMA_BASE_URL, model=OLLAMA_MODEL)
+    force_provider: str | None = None,
+) -> tuple[str, str]:
+    """Returns (answer, provider) where provider is "ollama" or "openai".
+
+    `force_provider` is a per-request override (from the frontend's provider
+    toggle) that takes precedence over the FORCE_LLM_PROVIDER env var, which
+    remains the deployment-wide default when no request specifies one.
+    """
+    effective_force = force_provider or FORCE_LLM_PROVIDER
+
+    if effective_force == "openai":
+        if not OPENAI_API_KEY:
+            raise RuntimeError(
+                "OpenAI provider was requested but OPENAI_API_KEY is not configured."
+            )
+        from app.llm.openai_client import OpenAIClient
+
+        openai_client = OpenAIClient()
+        answer = await openai_client.generate(messages=messages, system_prompt=system_prompt)
+        return answer, "openai"
+
+    ollama = OllamaClient(
+        base_url=OLLAMA_BASE_URL, model=OLLAMA_MODEL, timeout_seconds=OLLAMA_TIMEOUT_SECONDS
+    )
 
     try:
-        return await ollama.generate(messages=messages, system_prompt=system_prompt)
+        answer = await ollama.generate(messages=messages, system_prompt=system_prompt)
+        return answer, "ollama"
     except Exception as exc:
+        if effective_force == "ollama":
+            # Ollama was explicitly requested -- do not silently fall back to
+            # a different provider than the one the caller asked for.
+            raise RuntimeError(f"Ollama was requested but generation failed: {exc}") from exc
         logger.warning("Ollama failed (%s) -- falling back to OpenAI", exc)
 
     if not OPENAI_API_KEY:
         raise RuntimeError("Ollama failed and OPENAI_API_KEY is not configured.")
 
     try:
+        from app.llm.openai_client import OpenAIClient
+
         openai_client = OpenAIClient()
-        return await openai_client.generate(messages=messages, system_prompt=system_prompt)
+        answer = await openai_client.generate(messages=messages, system_prompt=system_prompt)
+        return answer, "openai"
     except Exception as exc:
         raise RuntimeError(f"Both Ollama and OpenAI generation failed: {exc}") from exc

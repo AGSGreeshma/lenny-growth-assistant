@@ -1,16 +1,17 @@
 import logging
 import os
 
-from fastapi import Depends, FastAPI, HTTPException
+import httpx
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.database import get_db
-from app.rag.retriever import TranscriptRetriever
-from app.rag.generator import generate_answer
-from app.api import sessions, chat, essay
+from app.config import OLLAMA_BASE_URL
+from app.database import get_db, ensure_schema
+from app.api import artifact, sessions, chat, essay
+
+ensure_schema()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("lenny-assistant")
@@ -40,28 +41,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-class AskRequest(BaseModel):
-    question: str = Field(..., min_length=1, max_length=2000)
-
-
-class Source(BaseModel):
-    episode: str = "Unknown Episode"
-    guest: str = "Unknown Guest"
-    timestamp: str = "N/A"
-    score: float = 0.0
-    url: str | None = None
-
-
-class AskResponse(BaseModel):
-    answer: str
-    grounded: bool
-    sources: list[Source]
-
-
 app.include_router(sessions.router)
 app.include_router(chat.router)
 app.include_router(essay.router)
+app.include_router(artifact.router)
 
 
 @app.get("/")
@@ -69,52 +52,68 @@ def root():
     return {"message": "Lenny Growth Assistant API is running!"}
 
 
+def _check_db() -> tuple[str, str | None]:
+    try:
+        db_gen = get_db()
+        db: Session = next(db_gen)
+        try:
+            db.execute(text("SELECT 1"))
+            return "ok", None
+        finally:
+            db_gen.close()
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Health check: DB error")
+        return "unavailable", str(exc)
+
+
+def _check_ollama() -> tuple[str, str | None]:
+    try:
+        response = httpx.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=2.0)
+        response.raise_for_status()
+        return "ok", None
+    except Exception as exc:  # noqa: BLE001
+        # Not fatal: the router falls back to OpenAI if OPENAI_API_KEY is
+        # configured, so Ollama being down is "degraded", not "unavailable",
+        # unless the caller has no cloud fallback configured either.
+        return "unreachable", str(exc)
+
+
+def _check_embedding_model() -> tuple[str, str | None]:
+    try:
+        from app.rag.embeddings import model  # noqa: F401 - import triggers load if not already
+
+        return ("ok", None) if model is not None else ("unavailable", "model object is None")
+    except Exception as exc:  # noqa: BLE001
+        return "unavailable", str(exc)
+
+
 @app.get("/api/health")
-def health(db: Session = Depends(get_db)):
-    status = {"api": "ok", "db": "unknown"}
-    try:
-        db.execute(text("SELECT 1"))
-        status["db"] = "ok"
-    except Exception as exc:
-        logger.exception("Health check DB error")
-        status["db"] = f"error: {exc}"
-    return status
+def health():
+    """Reports API/DB/Ollama/embedding-model status individually, plus an
+    overall rollup that distinguishes "fully healthy" from "degraded but
+    usable" (e.g. Ollama down but OpenAI configured) from "unavailable"
+    (nothing can generate an answer at all). See docs/architecture.md's
+    Observability section for how each state is used."""
+    from app.config import OPENAI_API_KEY
 
+    db_status, db_error = _check_db()
+    ollama_status, ollama_error = _check_ollama()
+    embedding_status, embedding_error = _check_embedding_model()
 
-def to_source(chunk: dict) -> Source:
-    """Builds a Source safely no matter what keys/None values retriever.py returns."""
-    return Source(
-        episode=chunk.get("episode") or chunk.get("episode_title") or "Unknown Episode",
-        guest=chunk.get("guest") or chunk.get("guest_name") or "Unknown Guest",
-        timestamp=chunk.get("timestamp") or chunk.get("timestamp_ref") or "N/A",
-        score=chunk.get("score") or 0.0,
-        url=chunk.get("url"),
-    )
+    can_generate = ollama_status == "ok" or bool(OPENAI_API_KEY)
 
+    if db_status == "ok" and ollama_status == "ok" and embedding_status == "ok":
+        overall = "healthy"
+    elif db_status != "ok" or embedding_status != "ok" or not can_generate:
+        overall = "unavailable"
+    else:
+        overall = "degraded"
 
-@app.post("/ask", response_model=AskResponse)
-async def ask(request: AskRequest, db: Session = Depends(get_db)):
-    question = request.question.strip()
-    if not question:
-        raise HTTPException(status_code=400, detail="Question cannot be empty.")
-
-    try:
-        retriever = TranscriptRetriever(db)
-        chunks = retriever.retrieve_relevant_chunks(question, top_k=5)
-    except Exception:
-        logger.exception("Retrieval failed")
-        raise HTTPException(status_code=502, detail="Retrieval step failed. Check DB connection.")
-
-    try:
-        answer = await generate_answer(question, chunks)
-    except Exception:
-        logger.exception("Generation failed")
-        raise HTTPException(status_code=502, detail="LLM generation failed. Check Ollama/API is running and responsive.")
-
-    is_grounded = bool(chunks) and "do not provide enough information" not in answer
-
-    return AskResponse(
-        answer=answer,
-        grounded=is_grounded,
-        sources=[to_source(c) for c in chunks] if is_grounded else [],
-    )
+    return {
+        "status": overall,
+        "api": "ok",
+        "db": {"status": db_status, "error": db_error},
+        "ollama": {"status": ollama_status, "error": ollama_error, "base_url": OLLAMA_BASE_URL},
+        "embedding_model": {"status": embedding_status, "error": embedding_error},
+        "cloud_fallback_configured": bool(OPENAI_API_KEY),
+    }

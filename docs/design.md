@@ -2,10 +2,11 @@
 
 ## Status
 
-The chat experience described in sections 1-4 is implemented. The session
-sidebar, artifact viewer, and model-toggle UI described in sections 5-6 are
-planned additions, not yet built — included here as the design target so
-implementation stays consistent.
+The chat experience described in sections 1-4 is implemented, including the
+not-grounded visual state. The artifact viewer (section 6) and a
+provider-toggle control (in the header, not a separate model-toggle UI as
+originally sketched) are also implemented. The session sidebar (section 5)
+remains a planned addition, not yet built.
 
 ## 1. UI/UX Principles
 
@@ -79,11 +80,31 @@ A collapsible right-hand pane, mirroring the Claude Artifacts pattern:
 
 ## 7. Accessibility
 
-- Semantic heading structure in `Header`/`EmptyState`.
-- `.sr-only` utility present in the design system for screen-reader-only text
-  (e.g. loading state announcements — to be applied to the loading indicator).
-- Color contrast: ink (#1c1915) on paper (#f4efe6) and cream (#fffaf3)
-  backgrounds meets WCAG AA for body text.
-- Planned: `aria-live="polite"` region around the message list so screen reader
-  users are notified when a new answer arrives, and visible focus states on the
-  composer and submit control.
+- **Heading structure:** a single `<h1>` (`Header`, always present, not
+  conditional on chat state) with `<h2>`s below it (`EmptyState`'s tagline,
+  each message's "Sources" section) — screen reader users navigating by
+  heading get a real page outline at every state, not just on first load.
+- **Live regions:** the message list uses `role="log"` + `aria-live="polite"`
+  (`Chat.jsx`) so new messages are announced without re-reading the whole
+  transcript; the loading indicator uses `role="status"`; error states use
+  `role="alert"`.
+- **Focus visibility:** every interactive control (buttons, links, the
+  composer) has an explicit `focus-visible:ring-2` style — verified this
+  isn't left to browser defaults on any control, including ones added after
+  the initial pass (provider toggle, "New chat", "Turn into essay",
+  artifact viewer's "Close", the init-error "Retry" button).
+- **Artifact viewer:** rendered as an `<aside aria-label="Generated
+  artifact">` landmark, closeable via a focus-visible "Close" button or the
+  Escape key.
+- **Labels & names:** the composer's textarea has a real (`.sr-only`)
+  `<label>`, not just a placeholder, and is `aria-describedby`-linked to the
+  "Enter to send" hint; source links that open in a new tab say so via
+  `.sr-only` text, not just visually.
+- **Color contrast:** ink (#1c1915) on paper (#f4efe6) and cream (#fffaf3)
+  backgrounds meets WCAG AA for body text; the not-grounded (amber) and
+  error (rose) states use sufficiently dark text on their tinted
+  backgrounds.
+- **Not yet done:** no automated accessibility test (e.g. axe) in the test
+  suite; keyboard-only navigation and screen-reader behavior verified by
+  code inspection and a rendered-DOM check, not a full manual screen-reader
+  pass.

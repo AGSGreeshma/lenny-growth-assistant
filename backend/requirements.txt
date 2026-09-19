@@ -7,4 +7,12 @@ pgvector
 sentence-transformers
 pydantic
 httpx
+openai
 PyYAML
+# Pinned, not left open: 0.2.156 ships wheels with a bundled Claude Code CLI
+# for Windows, Linux, and macOS. The very next release (0.2.157) dropped the
+# Windows wheel entirely (PyPI only lists macOS/Linux wheels + an sdist for
+# it) -- an unpinned install on Windows would silently fall back to building
+# from source, which has no bundled CLI binary at all. See
+# docs/architecture.md's Agent SDK section.
+claude-agent-sdk==0.2.156

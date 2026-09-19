@@ -28,6 +28,11 @@ class ChatSession(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     title = Column(String, nullable=True)
+    # Anonymous client label (e.g. browser user-agent), not a user identity --
+    # there is no authentication in scope for this app (see docs/PRD.md).
+    # This is what satisfies the assignment's "session IDs, timestamps, and
+    # user metadata" persistence requirement without inventing an auth system.
+    client_label = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

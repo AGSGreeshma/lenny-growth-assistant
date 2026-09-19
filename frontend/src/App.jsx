@@ -14,12 +14,15 @@ function createId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+const PROVIDER_STORAGE_KEY = "lenny_provider_preference";
+
 function historyToMessages(historyMessages) {
   return historyMessages.map((m) => ({
     id: createId(),
     role: m.role,
     content: m.content,
     sources: Array.isArray(m.sources) ? m.sources : [],
+    artifactType: m.artifact_type || null,
   }));
 }
 
@@ -31,40 +34,55 @@ export default function App() {
   const [isInitializing, setIsInitializing] = useState(true);
   const [artifact, setArtifact] = useState(null);
   const [essayLoading, setEssayLoading] = useState(false);
+  const [initError, setInitError] = useState(null);
+  const [provider, setProvider] = useState(
+    () => localStorage.getItem(PROVIDER_STORAGE_KEY) || null
+  );
+
+  function handleProviderChange(nextProvider) {
+    setProvider(nextProvider);
+    if (nextProvider) {
+      localStorage.setItem(PROVIDER_STORAGE_KEY, nextProvider);
+    } else {
+      localStorage.removeItem(PROVIDER_STORAGE_KEY);
+    }
+  }
+
+  async function init() {
+    setInitError(null);
+    setIsInitializing(true);
+    const storedId = localStorage.getItem(SESSION_STORAGE_KEY);
+
+    try {
+      if (storedId) {
+        const history = await getSessionHistory(storedId);
+        if (history) {
+          setSessionId(history.session_id);
+          setMessages(historyToMessages(history.messages));
+          setIsInitializing(false);
+          return;
+        }
+      }
+
+      const session = await createSession();
+      localStorage.setItem(SESSION_STORAGE_KEY, session.session_id);
+      setSessionId(session.session_id);
+    } catch (error) {
+      // Previously this left sessionId null with no explanation, so every
+      // future "Ask" click silently no-op'd. Surface it instead.
+      setSessionId(null);
+      setInitError(
+        error instanceof Error
+          ? error.message
+          : "Couldn't connect to the assistant. Please make sure the backend is running."
+      );
+    } finally {
+      setIsInitializing(false);
+    }
+  }
 
   useEffect(() => {
-    let cancelled = false;
-
-    async function init() {
-      const storedId = localStorage.getItem(SESSION_STORAGE_KEY);
-
-      try {
-        if (storedId) {
-          const history = await getSessionHistory(storedId);
-          if (history && !cancelled) {
-            setSessionId(history.session_id);
-            setMessages(historyToMessages(history.messages));
-            setIsInitializing(false);
-            return;
-          }
-        }
-
-        const session = await createSession();
-        if (!cancelled) {
-          localStorage.setItem(SESSION_STORAGE_KEY, session.session_id);
-          setSessionId(session.session_id);
-        }
-      } catch {
-        // Leave sessionId null; submitQuestion will surface a connection error.
-      } finally {
-        if (!cancelled) setIsInitializing(false);
-      }
-    }
-
     init();
-    return () => {
-      cancelled = true;
-    };
   }, []);
 
   async function startNewChat() {
@@ -76,8 +94,13 @@ export default function App() {
       setSessionId(session.session_id);
       setMessages([]);
       setDraft("");
-    } catch {
-      // Leave the current session active if creating a new one fails.
+      setInitError(null);
+    } catch (error) {
+      setInitError(
+        error instanceof Error
+          ? error.message
+          : "Couldn't start a new chat. Please try again."
+      );
     } finally {
       setIsInitializing(false);
     }
@@ -87,12 +110,17 @@ export default function App() {
     if (!sessionId || essayLoading || !topic) return;
     setEssayLoading(true);
     try {
-      const { essay, sources } = await generateEssay(sessionId, topic);
+      const { essay, sources, provider: usedProvider } = await generateEssay(
+        sessionId,
+        topic,
+        provider
+      );
       setArtifact({
         type: "markdown",
         title: `Ship 30 for 30: ${topic.slice(0, 60)}`,
         content: essay,
         sources,
+        provider: usedProvider,
       });
     } catch (error) {
       setArtifact({
@@ -110,7 +138,16 @@ export default function App() {
 
   async function submitQuestion(rawQuestion) {
     const question = rawQuestion.trim();
-    if (!question || isLoading || !sessionId) return;
+    if (!question || isLoading) return;
+
+    if (!sessionId) {
+      // Previously this just returned here, so the Ask button looked
+      // clickable but silently did nothing. Surface it instead.
+      setInitError(
+        "No active session -- couldn't reach the assistant. Tap Retry above to reconnect."
+      );
+      return;
+    }
 
     const userMessage = { id: createId(), role: "user", content: question };
     const loadingMessage = { id: createId(), role: "assistant", loading: true };
@@ -120,11 +157,30 @@ export default function App() {
     setMessages((current) => [...current, userMessage, loadingMessage]);
 
     try {
-      const { answer, sources } = await sendChatMessage(sessionId, question);
+      const {
+        answer,
+        sources,
+        provider: usedProvider,
+        grounded,
+        artifact: responseArtifact,
+      } = await sendChatMessage(sessionId, question, provider);
+
+      if (responseArtifact) {
+        setArtifact({ ...responseArtifact, sources, provider: usedProvider });
+      }
+
       setMessages((current) =>
         current.map((message) =>
           message.id === loadingMessage.id
-            ? { id: loadingMessage.id, role: "assistant", content: answer, sources }
+            ? {
+                id: loadingMessage.id,
+                role: "assistant",
+                content: answer,
+                sources,
+                provider: usedProvider,
+                grounded,
+                hasArtifact: Boolean(responseArtifact),
+              }
             : message
         )
       );
@@ -148,7 +204,27 @@ export default function App() {
 
   return (
     <div className="flex h-dvh flex-col bg-paper">
-      <Header onNewChat={startNewChat} newChatDisabled={isLoading || isInitializing} />
+      <Header
+        onNewChat={startNewChat}
+        newChatDisabled={isLoading || isInitializing}
+        provider={provider}
+        onProviderChange={handleProviderChange}
+      />
+      {initError ? (
+        <div
+          role="alert"
+          className="flex items-center justify-between gap-3 border-b border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-900 sm:px-6"
+        >
+          <span>{initError}</span>
+          <button
+            type="button"
+            onClick={init}
+            className="shrink-0 rounded-lg border border-rose-300 bg-white px-3 py-1 text-xs font-medium text-rose-900 hover:bg-rose-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500"
+          >
+            Retry
+          </button>
+        </div>
+      ) : null}
       <Chat
         messages={messages}
         draft={draft}

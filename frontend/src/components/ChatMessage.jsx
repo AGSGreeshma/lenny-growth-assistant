@@ -57,20 +57,45 @@ export default function ChatMessage({ message, topic, onGenerateEssay, essayLoad
   }
 
   const sources = Array.isArray(message.sources) ? message.sources : [];
+  const notGrounded = message.grounded === false;
 
   return (
     <div className="flex justify-start animate-fade-up">
-      <article className="w-full max-w-2xl rounded-2xl border border-line bg-cream px-5 py-5 shadow-sm sm:px-6">
+      <article
+        className={
+          "w-full max-w-2xl rounded-2xl border px-5 py-5 shadow-sm sm:px-6 " +
+          (notGrounded ? "border-amber-200 bg-amber-50" : "border-line bg-cream")
+        }
+      >
         <div className="mb-3 flex items-center justify-between gap-3">
-          <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-moss">
-            Answer
-          </p>
-          {onGenerateEssay ? (
+          <div className="flex items-center gap-2">
+            <p
+              className={
+                "text-[11px] font-medium uppercase tracking-[0.16em] " +
+                (notGrounded ? "text-amber-700" : "text-moss")
+              }
+            >
+              {notGrounded ? "Not grounded" : "Answer"}
+            </p>
+            {message.provider ? (
+              <span
+                className="rounded-full border border-line bg-paper px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted"
+                title={
+                  message.provider === "ollama"
+                    ? "Generated locally via Ollama"
+                    : "Generated via OpenAI (Ollama unavailable or slow)"
+                }
+              >
+                {message.provider === "ollama" ? "Local (Ollama)" : "Cloud (OpenAI)"}
+              </span>
+            ) : null}
+          </div>
+          {onGenerateEssay && !notGrounded && !message.hasArtifact ? (
             <button
               type="button"
               onClick={() => onGenerateEssay(topic || message.content)}
               disabled={essayLoading}
-              className="shrink-0 rounded-lg border border-line bg-paper px-2.5 py-1 text-[11px] font-medium text-ink transition hover:border-moss/40 hover:text-moss disabled:cursor-not-allowed disabled:opacity-50"
+              className="shrink-0 rounded-lg border border-line bg-paper px-2.5 py-1 text-[11px] font-medium text-ink transition hover:border-moss/40 hover:text-moss focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-moss disabled:cursor-not-allowed disabled:opacity-50"
             >
               {essayLoading ? "Writing essay..." : "Turn into essay"}
             </button>

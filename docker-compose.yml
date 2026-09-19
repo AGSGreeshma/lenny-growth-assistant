@@ -1,0 +1,60 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: lenny
+    ports:
+      - "5432:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d lenny"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/lenny
+      # Ollama is documented as host-run (not containerized): a local LLM
+      # demo assumes the evaluator already has `ollama serve` running on
+      # their machine. host.docker.internal resolves to the host from inside
+      # the container on Docker Desktop (Windows/Mac); extra_hosts below adds
+      # the same resolution on Linux.
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:3b}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      FORCE_LLM_PROVIDER: ${FORCE_LLM_PROVIDER:-}
+      RAG_MIN_SIMILARITY: ${RAG_MIN_SIMILARITY:-0.30}
+      AGENT_SDK_ENABLED: ${AGENT_SDK_ENABLED:-false}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8000:8000"
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Runs in the evaluator's browser, not inside the Docker network --
+        # must be the backend's published host port, not "backend:8000".
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "5173:80"
+
+volumes:
+  db_data:

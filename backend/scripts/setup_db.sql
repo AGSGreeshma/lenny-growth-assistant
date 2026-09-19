@@ -32,7 +32,11 @@ CREATE TABLE IF NOT EXISTS messages (
     role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
     content TEXT NOT NULL,
     sources JSONB,
+    artifact_type TEXT,
     created_at TIMESTAMPTZ DEFAULT now()
 );
+
+-- Existing DBs created before artifact_type existed skip the CREATE above.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS artifact_type TEXT;
 
 CREATE INDEX IF NOT EXISTS messages_session_id_idx ON messages(session_id);
