@@ -121,9 +121,27 @@ agent layer, so both paths produce the same artifact shape.
    `transcript_chunks` via SQLAlchemy. Re-running ingestion skips episodes
    that already have chunks stored (by episode title) unless `--force` is
    passed, so adding new transcript files and re-running only ingests what's
-   new.
+   new. This uses `app/rag/embeddings.py`'s `generate_embedding()`
+   (torch/`sentence-transformers`) -- a local-only dependency, listed in
+   `backend/requirements-dev.txt` rather than the production
+   `requirements.txt`, and never installed in the production Docker image.
 2. On each `/api/chat`, `/api/essay`, or `/api/artifact` request,
-   `TranscriptRetriever` embeds the query the same way and runs a
+   `TranscriptRetriever` embeds the query with the *same model*, same 384
+   dimensions, but a different, lighter runtime --
+   `generate_query_embedding()` (`fastembed`/ONNX Runtime) instead of torch.
+   This split exists because the torch/`sentence-transformers` stack alone
+   measured ~524MB RSS after a single encode call inside the production
+   container, exceeding Render's free-tier 512MiB limit before serving a
+   single request; the fastembed path measured ~279MB isolated / ~452-463MB
+   for the full running app under real Ollama-backed chat requests --
+   under the 512MiB limit, but by a real, modest margin (~50-60MB), not a
+   wide one; worth re-measuring on Render itself rather than assuming this
+   Docker Desktop figure transfers exactly. Empirically verified
+   equivalent before switching, not assumed: cosine similarity 1.000000 and
+   100% position-identical top-5 retrieval results across representative
+   queries against the real Supabase corpus. Both models load lazily (on
+   first call, not at import time), so importing this module doesn't pull
+   either framework into memory until it's actually used, then runs a
    cosine-similarity search over the pgvector HNSW index, then drops any
    chunk scoring below `RAG_MIN_SIMILARITY` (default 0.30) before returning
    the rest. An out-of-domain query that still yields *some* nearest

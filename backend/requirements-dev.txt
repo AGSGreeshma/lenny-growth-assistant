@@ -1,5 +1,4 @@
-# Test-only dependencies. Not installed in the production Docker image
-# (see backend/Dockerfile) -- keep the runtime image lean.
 -r requirements.txt
 pytest
 pytest-asyncio
+sentence-transformers

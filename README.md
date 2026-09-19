@@ -270,7 +270,11 @@ venv\Scripts\activate
 # macOS/Linux:
 source venv/bin/activate
 
-pip install -r requirements.txt
+# requirements-dev.txt, not the production requirements.txt: ingestion
+# needs sentence-transformers/torch for local embedding, which was
+# deliberately removed from the production dependencies (and the Docker
+# image) to fit Render's free-tier memory limit -- see docs/architecture.md.
+pip install -r requirements-dev.txt
 ```
 
 ```bash
@@ -327,10 +331,13 @@ enable `vector` and `pgcrypto` yourself first; see
 
 The transcript archive lives in `lennys-podcast-transcripts/episodes/` at the
 repo root. With `DATABASE_URL` set (in `.env` or the shell) and the backend's
-venv active:
+venv active, install the dev requirements once if you haven't already
+(ingestion needs `sentence-transformers`/torch, which the production
+`requirements.txt` deliberately excludes -- see docs/architecture.md):
 
 ```bash
 cd backend
+pip install -r requirements-dev.txt
 python scripts/ingest.py
 ```
 
