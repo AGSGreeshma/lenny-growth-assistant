@@ -261,6 +261,26 @@ pulled) must already be running on the host before `docker compose up`.
 Postgres/pgvector (Supabase-hosted, or any reachable instance) + a local
 `ollama serve` process. See the README for exact commands.
 
+**Known hardware caveat: GPU/CUDA failures on Ollama's side are a host
+issue, not a code issue.** On one development machine, Ollama's GPU worker
+process crashed on every request (`exit status 0xc0000409` — a Windows
+stack-buffer-overrun — during `CUDA error: shared object initialization
+failed`), which is a driver/CUDA-runtime incompatibility, not anything in
+this codebase. Symptoms looked like a hang from the app's side (every
+`/api/chat`/`/api/essay`/`/api/artifact` request would time out after
+~3 minutes with no response) because Ollama's own supervisor kept silently
+retrying a GPU worker that would never come up, occasionally leaving
+multiple zombie `ollama.exe` processes stacked up. The fix was host-level,
+not code-level: restart Ollama with `CUDA_VISIBLE_DEVICES=-1` (or
+`OLLAMA_LLM_LIBRARY=cpu`) to force CPU-only inference, bypassing the broken
+CUDA path. CPU-only inference is slower and pushed real generation times for
+the longer skills above the previous 180s timeout (see
+`OLLAMA_TIMEOUT_SECONDS` below) but is otherwise fully functional and was
+verified end-to-end through the real running app. If Ollama appears
+unresponsive, check `ollama ps` for zombie processes and the Ollama app's
+own `server.log` for `CUDA error` / `GPU discovery watchdog timed out`
+before assuming it's an application bug.
+
 ## Observability & resilience
 
 - Structured logging (`lenny-assistant` logger) captures retrieval and

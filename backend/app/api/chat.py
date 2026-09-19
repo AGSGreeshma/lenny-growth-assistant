@@ -77,7 +77,7 @@ async def chat(request: ChatRequest, db: DbSession = Depends(get_db)):
     # 30 for 30 essay request, or an HTML/CSS artifact request. See
     # app/agent/orchestrator.py for why routing (not answer-writing) is what
     # runs through the Claude Agent SDK.
-    routing = await classify_intent(message, db)
+    routing = await classify_intent(message, db, history=history)
 
     artifact: Artifact | None = None
 

@@ -165,7 +165,7 @@ running, a DB connection lost mid-request returns a `502` with an
 actionable message.
 
 **What happens on an LLM timeout?**
-`OLLAMA_TIMEOUT_SECONDS` (default 180, sized from measured live latency —
+`OLLAMA_TIMEOUT_SECONDS` (default 300, sized from measured live latency —
 see `.env.example`) bounds the Ollama call; on timeout it's treated the same
 as any other Ollama failure and retried against OpenAI per the fallback
 logic above.
@@ -364,7 +364,7 @@ relevant:
 |---|---|
 | `DATABASE_URL` | Postgres connection string (pgvector required) |
 | `OLLAMA_BASE_URL` / `OLLAMA_MODEL` | Local model config (mandatory path) |
-| `OLLAMA_TIMEOUT_SECONDS` | Ollama request timeout (default `180`; on CPU-only reference hardware, chat/essay/HTML-artifact generation measured 64s/78-105s/121s+ respectively) |
+| `OLLAMA_TIMEOUT_SECONDS` | Ollama request timeout (default `300`; on CPU-only reference hardware, chat/essay/HTML-artifact generation measured 64s/78-105s/121s+ on one machine and up to 198.6s/180.5s (essay/HTML) on another — CPU-only throughput varies meaningfully by hardware) |
 | `OPENAI_API_KEY` | Cloud fallback; blank = fully offline (fails if Ollama also fails) |
 | `FORCE_LLM_PROVIDER` | Deployment-wide provider override (`openai` or blank) |
 | `RAG_MIN_SIMILARITY` | Cosine-similarity floor for "grounded" (default `0.30`) |

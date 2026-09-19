@@ -16,10 +16,20 @@ OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
 # CPU-only hardware (llama3.2:3b): plain chat ~64s, Ship 30 essay ~78-105s,
 # HTML artifact ~121s+ (its system prompt + expected output are the largest
 # of the three skills). A 60s timeout reliably failed real requests; even
-# 120s intermittently timed out the HTML artifact path specifically. 180s
-# leaves real headroom across all three generation paths; tune via this env
-# var for slower/faster hardware.
-OLLAMA_TIMEOUT_SECONDS = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "180"))
+# 120s intermittently timed out the HTML artifact path specifically.
+#
+# Re-measured later, on a different machine, after its GPU/CUDA path turned
+# out to be broken (a driver-level crash, not a code issue -- see
+# docs/architecture.md) and Ollama fell back to CPU-only inference there:
+# Ship 30 essay measured 198.6s and HTML artifact 180.5s end-to-end, both
+# above the previous 180s value. CPU-only throughput varies meaningfully by
+# machine, so 300s was chosen for real headroom above the slowest measurement
+# actually observed, not the fastest; tune via this env var for slower/faster
+# hardware. This value must also be forwarded through docker-compose.yml's
+# backend environment block, not just set here -- it was previously missing
+# there, which meant Docker deployments silently ignored whatever was
+# configured and always used this hardcoded fallback.
+OLLAMA_TIMEOUT_SECONDS = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "300"))
 FORCE_LLM_PROVIDER = os.getenv("FORCE_LLM_PROVIDER", "").strip().lower() or None
 
 # Cosine-similarity floor for the retriever (app/rag/retriever.py). Chunks

@@ -10,7 +10,12 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.agent.orchestrator import RoutingDecision, _classify_via_heuristics, classify_intent
+from app.agent.orchestrator import (
+    RoutingDecision,
+    _classify_via_heuristics,
+    _looks_referential,
+    classify_intent,
+)
 
 
 @pytest.mark.parametrize(
@@ -28,6 +33,50 @@ def test_heuristic_classifier_intents(message, expected_intent):
     decision = _classify_via_heuristics(message)
     assert decision.intent == expected_intent
     assert decision.used_agent_sdk is False
+
+
+@pytest.mark.parametrize(
+    "message,expected",
+    [
+        ("Turn this into a Ship 30 for 30 essay", True),
+        ("Give me this as an HTML page", True),
+        ("Can you make a one-pager summarizing this?", True),
+        ("write a ship 30 post about onboarding", False),
+        ("What did Brian Chesky say about pricing?", False),
+    ],
+)
+def test_looks_referential(message, expected):
+    assert _looks_referential(message) is expected
+
+
+def test_heuristic_classifier_resolves_referential_topic_from_history():
+    # A bare "turn this into an essay" has no topic of its own -- the topic
+    # should come from the last real question in the conversation, not the
+    # literal referential phrase (see orchestrator.py's _looks_referential).
+    history = [
+        {"role": "user", "content": "How do I improve onboarding activation?"},
+        {"role": "assistant", "content": "Focus on the aha-moment..."},
+    ]
+    decision = _classify_via_heuristics("Turn this into a Ship 30 for 30 essay", history)
+    assert decision.intent == "essay"
+    assert decision.topic == "How do I improve onboarding activation?"
+
+
+def test_heuristic_classifier_keeps_self_contained_topic_even_with_history():
+    # When the message already names its own subject, history should not
+    # override it.
+    history = [{"role": "user", "content": "How do I improve onboarding activation?"}]
+    decision = _classify_via_heuristics("write a ship 30 post about retention", history)
+    assert decision.intent == "essay"
+    assert decision.topic == "write a ship 30 post about retention"
+
+
+def test_heuristic_classifier_referential_with_no_history_keeps_literal_message():
+    # No prior user turn to resolve against -- fall back to the literal
+    # message rather than raising or returning an empty topic.
+    decision = _classify_via_heuristics("Turn this into a Ship 30 for 30 essay", history=None)
+    assert decision.intent == "essay"
+    assert decision.topic == "Turn this into a Ship 30 for 30 essay"
 
 
 @pytest.mark.asyncio

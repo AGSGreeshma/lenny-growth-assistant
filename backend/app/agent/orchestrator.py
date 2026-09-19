@@ -101,6 +101,13 @@ You may call the retrieve_transcripts tool if it would help you judge whether \
 the topic is something the knowledge base likely covers, but you are not \
 required to.
 
+You may be given recent conversation turns before the latest message, to help \
+you resolve references like "this" or "that" in the latest message (e.g. \
+"turn this into an essay" after a question about onboarding means the topic \
+is onboarding, not the literal phrase "this"). Use that context only to fill \
+in the topic -- always base the intent classification itself on the latest \
+message.
+
 Respond with ONLY a single JSON object on its own line, no other text, no \
 markdown fences:
 {"intent": "chat" | "essay" | "html_artifact", "topic": "<the underlying question or topic, in the user's own words>"}
@@ -117,16 +124,24 @@ class RoutingDecision:
     router_error: str | None = None
 
 
-async def classify_intent(message: str, db) -> RoutingDecision:
+async def classify_intent(
+    message: str, db, history: list[dict] | None = None
+) -> RoutingDecision:
     """Classify a chat message's intent, preferring the Claude Agent SDK and
-    degrading to a heuristic router if the SDK path fails for any reason."""
+    degrading to a heuristic router if the SDK path fails for any reason.
+
+    ``history`` (prior turns of the current session, oldest first) is
+    optional context used only to resolve referential phrasing like "turn
+    this into an essay" back to the actual topic discussed earlier -- it
+    never changes which intent is picked, only what topic string is
+    extracted for essay/html_artifact intents."""
     if not AGENT_SDK_ENABLED:
         logger.info("AGENT_SDK_ENABLED=false -- routing via the local heuristic router only")
-        return _classify_via_heuristics(message)
+        return _classify_via_heuristics(message, history)
 
     try:
         decision = await asyncio.wait_for(
-            _classify_via_agent_sdk(message, db), timeout=AGENT_SDK_TIMEOUT_SECONDS
+            _classify_via_agent_sdk(message, db, history), timeout=AGENT_SDK_TIMEOUT_SECONDS
         )
         logger.info("Routed via Claude Agent SDK: intent=%s", decision.intent)
         return decision
@@ -137,12 +152,37 @@ async def classify_intent(message: str, db) -> RoutingDecision:
             type(exc).__name__,
             exc,
         )
-        decision = _classify_via_heuristics(message)
+        decision = _classify_via_heuristics(message, history)
         decision.router_error = f"{type(exc).__name__}: {exc}"
         return decision
 
 
-async def _classify_via_agent_sdk(message: str, db) -> RoutingDecision:
+def _format_recent_history(history: list[dict] | None) -> str:
+    """Compact rendering of the last few turns, just enough for the router
+    to resolve a referential "this"/"that" in the latest message -- not a
+    full transcript, so this stays cheap to send on every routing call."""
+    if not history:
+        return ""
+    lines = []
+    for turn in history[-4:]:
+        role = "User" if turn.get("role") == "user" else "Assistant"
+        content = (turn.get("content") or "")[:400]
+        lines.append(f"{role}: {content}")
+    return "\n".join(lines)
+
+
+def _last_user_message(history: list[dict] | None) -> str | None:
+    if not history:
+        return None
+    for turn in reversed(history):
+        if turn.get("role") == "user":
+            return turn.get("content")
+    return None
+
+
+async def _classify_via_agent_sdk(
+    message: str, db, history: list[dict] | None = None
+) -> RoutingDecision:
     # Imported lazily so a missing/broken claude_agent_sdk installation only
     # breaks routing (caught above), never the whole application at import time.
     from claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, TextBlock, query
@@ -161,8 +201,13 @@ async def _classify_via_agent_sdk(message: str, db) -> RoutingDecision:
         max_turns=3,
     )
 
+    recent = _format_recent_history(history)
+    prompt = (
+        f"Recent conversation:\n{recent}\n\nLatest message: {message}" if recent else message
+    )
+
     final_text = None
-    async for msg in query(prompt=message, options=options):
+    async for msg in query(prompt=prompt, options=options):
         if isinstance(msg, AssistantMessage):
             for block in msg.content:
                 if isinstance(block, TextBlock):
@@ -211,10 +256,30 @@ _HTML_KEYWORDS = (
 )
 
 
-def _classify_via_heuristics(message: str) -> RoutingDecision:
+def _looks_referential(message: str) -> bool:
+    """True for phrasing like "turn this into an essay" or "give me this as
+    HTML" -- a pronoun standing in for a topic from earlier in the
+    conversation, with no topic of its own (as opposed to e.g. "write a ship
+    30 post about onboarding", which already names its own subject)."""
+    words = set(re.findall(r"[a-z']+", message.lower()))
+    has_pronoun = bool(words & {"this", "that"})
+    has_own_subject = bool(words & {"about", "on"})
+    return has_pronoun and not has_own_subject
+
+
+def _classify_via_heuristics(message: str, history: list[dict] | None = None) -> RoutingDecision:
     lowered = message.lower()
     if any(kw in lowered for kw in _ESSAY_KEYWORDS):
-        return RoutingDecision(intent="essay", topic=message, used_agent_sdk=False)
-    if any(kw in lowered for kw in _HTML_KEYWORDS):
-        return RoutingDecision(intent="html_artifact", topic=message, used_agent_sdk=False)
-    return RoutingDecision(intent="chat", topic=message, used_agent_sdk=False)
+        intent = "essay"
+    elif any(kw in lowered for kw in _HTML_KEYWORDS):
+        intent = "html_artifact"
+    else:
+        return RoutingDecision(intent="chat", topic=message, used_agent_sdk=False)
+
+    topic = message
+    if _looks_referential(message):
+        prior_topic = _last_user_message(history)
+        if prior_topic:
+            topic = prior_topic
+
+    return RoutingDecision(intent=intent, topic=topic, used_agent_sdk=False)
