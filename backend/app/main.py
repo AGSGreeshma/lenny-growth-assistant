@@ -79,10 +79,16 @@ def _check_ollama() -> tuple[str, str | None]:
 
 
 def _check_embedding_model() -> tuple[str, str | None]:
+    """Exercises the actual production query-embedding path (fastembed),
+    not the ingestion-only torch path -- this is what a real request
+    actually depends on. The lazy singleton in app.rag.embeddings means
+    this only pays the real load cost once; subsequent health checks reuse
+    the cached model."""
     try:
-        from app.rag.embeddings import model  # noqa: F401 - import triggers load if not already
+        from app.rag.embeddings import generate_query_embedding
 
-        return ("ok", None) if model is not None else ("unavailable", "model object is None")
+        generate_query_embedding("healthcheck")
+        return "ok", None
     except Exception as exc:  # noqa: BLE001
         return "unavailable", str(exc)
 

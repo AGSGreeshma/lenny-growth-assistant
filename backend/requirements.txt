@@ -5,6 +5,7 @@ psycopg2-binary
 sqlalchemy
 pgvector
 sentence-transformers
+fastembed
 pydantic
 httpx
 openai

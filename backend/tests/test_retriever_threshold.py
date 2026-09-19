@@ -27,7 +27,7 @@ def _make_db(rows):
     return db
 
 
-@patch("app.rag.retriever.generate_embedding", return_value=[0.0] * 384)
+@patch("app.rag.retriever.generate_query_embedding", return_value=[0.0] * 384)
 def test_rows_at_or_above_floor_are_kept(mock_embed):
     db = _make_db([_row(0.85, "Strong match"), _row(DEFAULT_MIN_SIMILARITY, "Exactly at floor")])
     retriever = TranscriptRetriever(db)
@@ -38,7 +38,7 @@ def test_rows_at_or_above_floor_are_kept(mock_embed):
     assert {c["episode"] for c in chunks} == {"Strong match", "Exactly at floor"}
 
 
-@patch("app.rag.retriever.generate_embedding", return_value=[0.0] * 384)
+@patch("app.rag.retriever.generate_query_embedding", return_value=[0.0] * 384)
 def test_rows_below_floor_are_dropped(mock_embed):
     db = _make_db([_row(0.29, "Weak match"), _row(0.05, "Noise")])
     retriever = TranscriptRetriever(db)
@@ -48,7 +48,7 @@ def test_rows_below_floor_are_dropped(mock_embed):
     assert chunks == []
 
 
-@patch("app.rag.retriever.generate_embedding", return_value=[0.0] * 384)
+@patch("app.rag.retriever.generate_query_embedding", return_value=[0.0] * 384)
 def test_mixed_scores_only_keeps_rows_above_floor(mock_embed):
     db = _make_db([_row(0.9, "Strong"), _row(0.5, "Medium"), _row(0.1, "Weak")])
     retriever = TranscriptRetriever(db)
@@ -58,7 +58,7 @@ def test_mixed_scores_only_keeps_rows_above_floor(mock_embed):
     assert [c["episode"] for c in chunks] == ["Strong", "Medium"]
 
 
-@patch("app.rag.retriever.generate_embedding", return_value=[0.0] * 384)
+@patch("app.rag.retriever.generate_query_embedding", return_value=[0.0] * 384)
 def test_no_rows_returns_empty_list(mock_embed):
     db = _make_db([])
     retriever = TranscriptRetriever(db)
@@ -66,7 +66,7 @@ def test_no_rows_returns_empty_list(mock_embed):
     assert retriever.retrieve_relevant_chunks("anything") == []
 
 
-@patch("app.rag.retriever.generate_embedding", return_value=[0.0] * 384)
+@patch("app.rag.retriever.generate_query_embedding", return_value=[0.0] * 384)
 def test_custom_min_similarity_overrides_default(mock_embed):
     db = _make_db([_row(0.5, "Medium")])
     retriever = TranscriptRetriever(db)
@@ -75,7 +75,7 @@ def test_custom_min_similarity_overrides_default(mock_embed):
     assert len(retriever.retrieve_relevant_chunks("q", min_similarity=0.4)) == 1
 
 
-@patch("app.rag.retriever.generate_embedding", return_value=[0.0] * 384)
+@patch("app.rag.retriever.generate_query_embedding", return_value=[0.0] * 384)
 def test_chunk_dict_shape_matches_downstream_expectations(mock_embed):
     db = _make_db([_row(0.9, "Episode 1")])
     retriever = TranscriptRetriever(db)

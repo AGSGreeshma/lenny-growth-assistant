@@ -1,6 +1,6 @@
 from sqlalchemy import text
 
-from app.rag.embeddings import generate_embedding
+from app.rag.embeddings import generate_query_embedding
 
 # Cosine-similarity floor below which a retrieved chunk is treated as noise
 # rather than evidence. This is what lets the system say "I don't know"
@@ -54,7 +54,7 @@ class TranscriptRetriever:
         floor -- callers should treat that as "not grounded", not as "zero
         chunks happened to exist"."""
         # 1. Convert the user's question into a vector
-        query_vector = generate_embedding(query)
+        query_vector = generate_query_embedding(query)
 
         # 2. Search Supabase using pgvector cosine similarity. We still fetch
         # top_k unfiltered from SQL (cheap: pgvector's index does the real
