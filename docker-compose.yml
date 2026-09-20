@@ -52,7 +52,7 @@ services:
       # FORCE_LLM_PROVIDER=openai / a per-request override -- never
       # automatically -- see app/llm/router.py.
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.6-flash}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       FORCE_LLM_PROVIDER: ${FORCE_LLM_PROVIDER:-}
       RAG_MIN_SIMILARITY: ${RAG_MIN_SIMILARITY:-0.30}

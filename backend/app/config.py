@@ -14,14 +14,21 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 # the same `openai` pip package OpenAIClient already uses, not a separate
 # Google SDK -- see app/llm/gemini_client.py.
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-# gemini-2.0-flash is deprecated/shut down (confirmed against ai.google.dev
-# docs, not assumed) -- do not revert to it. gemini-2.5-flash is the
-# default: free-tier eligible with a documented quota (1,500 requests/day,
-# 1M TPM as of this writing) and an established track record. Configurable
-# specifically because Gemini's model lineup moves fast -- check
-# https://ai.google.dev/gemini-api/docs/models and your own AI Studio
-# dashboard before assuming this value is still current.
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+# gemini-2.0-flash and gemini-2.5-flash are both deprecated for new API
+# keys as of this writing -- gemini-2.5-flash still appears in ListModels
+# but returns a live 404 ("no longer available to new users") on actual
+# generation calls, confirmed against this project's own key, not assumed
+# from docs alone. gemini-3.8-flash is Google's documented "current stable"
+# recommendation, but empirical testing against this project's own key
+# found it returning live 503 "high demand" errors on ~1/3 of calls;
+# gemini-3.6-flash had a 100% success rate across the same testing and is
+# still a stable (non-"-latest", non-preview) pinned version, so it's the
+# default here despite being one minor version behind Google's headline
+# recommendation. Configurable specifically because both the model lineup
+# and its capacity move fast -- verify against
+# https://ai.google.dev/gemini-api/docs/models, and re-test for real 503s
+# (not just ListModels presence) before changing this.
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 OLLAMA_BASE_URL = os.getenv(
     "OLLAMA_BASE_URL",

@@ -498,7 +498,7 @@ relevant:
 | `DATABASE_URL` | Postgres connection string (pgvector required) |
 | `OLLAMA_BASE_URL` / `OLLAMA_MODEL` | Local model config (mandatory path) |
 | `OLLAMA_TIMEOUT_SECONDS` | Soft generation budget, not a hard cutoff (default `120`, deliberate trade-off — see "Ship 30 for 30 length vs. local-model latency" above). Responses are streamed; if the budget runs out, whatever was generated so far is returned (trimmed cleanly) rather than discarded. |
-| `GEMINI_API_KEY` / `GEMINI_MODEL` | The AUTO chain's cloud fallback (Ollama → Gemini). Free tier, no card required — [aistudio.google.com/apikey](https://aistudio.google.com/apikey). `GEMINI_MODEL` defaults to `gemini-2.5-flash`; `gemini-2.0-flash` is deprecated, do not use it. Blank `GEMINI_API_KEY` = fully offline (fails if Ollama also fails). |
+| `GEMINI_API_KEY` / `GEMINI_MODEL` | The AUTO chain's cloud fallback (Ollama → Gemini). Free tier, no card required — [aistudio.google.com/apikey](https://aistudio.google.com/apikey). `GEMINI_MODEL` defaults to `gemini-3.6-flash` (chosen over Google's headline `gemini-3.8-flash` after real testing found 3.8 returning live 503 "high demand" errors ~1/3 of the time); `gemini-2.0-flash` and `gemini-2.5-flash` are both deprecated for new API keys, do not use them. Blank `GEMINI_API_KEY` = fully offline (fails if Ollama also fails). |
 | `OPENAI_API_KEY` | Explicit-only cloud provider — never used automatically, only via `provider="openai"` / `FORCE_LLM_PROVIDER=openai` |
 | `FORCE_LLM_PROVIDER` | Deployment-wide provider override (`ollama` \| `gemini` \| `openai` or blank) |
 | `RAG_MIN_SIMILARITY` | Cosine-similarity floor for "grounded" (default `0.30`) |

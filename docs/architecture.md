@@ -185,10 +185,19 @@ soft-deadline cutoff that still produced a useful amount of content is
 OpenAI-compatible endpoint (`GEMINI_BASE_URL` in `app/config.py`), so
 pointing the existing `AsyncOpenAI` client at it with a Gemini API key and
 model name is the entire integration. `GEMINI_MODEL` defaults to
-`gemini-2.5-flash` (confirmed against `ai.google.dev`'s docs at
-integration time; `gemini-2.0-flash` is deprecated — check Google's current
-model list before assuming this default is still current, since Gemini's
-lineup moves fast).
+`gemini-3.6-flash`, a pinned stable version. Google's own docs headline
+`gemini-3.8-flash` as the "current stable" recommendation, but real
+testing against this project's key found 3.8 returning live 503 "high
+demand" errors on roughly 1/3 of calls, independent of rate limiting;
+3.6-flash had a 100% success rate across the same testing, so it's the
+default despite being one minor version behind Google's own
+recommendation. Both `gemini-2.0-flash` and `gemini-2.5-flash` are
+deprecated for new API keys — `gemini-2.5-flash` was this project's
+original default at integration time but started returning a live 404
+("no longer available to new users") within the same day, which is how
+fast Gemini's lineup (and capacity) moves. Re-verify against Google's
+current model list, and with real generation calls rather than just
+`ListModels` presence, before changing this default.
 
 Two ways to override the default Ollama-first behavior:
 - `FORCE_LLM_PROVIDER=ollama|gemini|openai` (env var, deployment-wide)
