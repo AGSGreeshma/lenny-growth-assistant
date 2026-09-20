@@ -50,8 +50,9 @@ class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=2000)
     # Optional per-request override for the frontend's provider toggle. None
     # (the default) means "use FORCE_LLM_PROVIDER / the normal Ollama-first,
-    # OpenAI-fallback behavior" -- see app/llm/router.py.
-    provider: Literal["ollama", "openai"] | None = None
+    # Gemini-fallback behavior" -- OpenAI is reachable only via an explicit
+    # value here, never automatically. See app/llm/router.py.
+    provider: Literal["ollama", "gemini", "openai"] | None = None
 
 
 class Artifact(BaseModel):
@@ -81,7 +82,7 @@ class ChatResponse(BaseModel):
 class EssayRequest(BaseModel):
     session_id: UUID
     topic: str = Field(..., min_length=1, max_length=500)
-    provider: Literal["ollama", "openai"] | None = None
+    provider: Literal["ollama", "gemini", "openai"] | None = None
 
 
 class EssayResponse(BaseModel):
@@ -94,7 +95,7 @@ class EssayResponse(BaseModel):
 class ArtifactRequest(BaseModel):
     session_id: UUID
     topic: str = Field(..., min_length=1, max_length=500)
-    provider: Literal["ollama", "openai"] | None = None
+    provider: Literal["ollama", "gemini", "openai"] | None = None
 
 
 class ArtifactResponse(BaseModel):

@@ -1,5 +1,6 @@
 import AnswerContent from "./AnswerContent.jsx";
 import SourceCard from "./SourceCard.jsx";
+import { PROVIDER_LABELS } from "../lib/providers.js";
 
 function LoadingBubble() {
   return (
@@ -80,13 +81,9 @@ export default function ChatMessage({ message, topic, onGenerateEssay, essayLoad
             {message.provider ? (
               <span
                 className="rounded-full border border-line bg-paper px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted"
-                title={
-                  message.provider === "ollama"
-                    ? "Generated locally via Ollama"
-                    : "Generated via OpenAI (Ollama unavailable or slow)"
-                }
+                title={PROVIDER_LABELS[message.provider]?.title ?? message.provider}
               >
-                {message.provider === "ollama" ? "Local (Ollama)" : "Cloud (OpenAI)"}
+                {PROVIDER_LABELS[message.provider]?.badge ?? message.provider}
               </span>
             ) : null}
           </div>

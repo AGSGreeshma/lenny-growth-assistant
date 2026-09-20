@@ -7,6 +7,22 @@ load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+# Gemini is the AUTO-chain cloud fallback (Ollama -> Gemini); OpenAI remains
+# fully wired but reachable only via explicit provider="openai" /
+# FORCE_LLM_PROVIDER=openai, never automatically -- see app/llm/router.py.
+# Uses Gemini's OpenAI-compatible endpoint (GEMINI_BASE_URL below) through
+# the same `openai` pip package OpenAIClient already uses, not a separate
+# Google SDK -- see app/llm/gemini_client.py.
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+# gemini-2.0-flash is deprecated/shut down (confirmed against ai.google.dev
+# docs, not assumed) -- do not revert to it. gemini-2.5-flash is the
+# default: free-tier eligible with a documented quota (1,500 requests/day,
+# 1M TPM as of this writing) and an established track record. Configurable
+# specifically because Gemini's model lineup moves fast -- check
+# https://ai.google.dev/gemini-api/docs/models and your own AI Studio
+# dashboard before assuming this value is still current.
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 OLLAMA_BASE_URL = os.getenv(
     "OLLAMA_BASE_URL",
     "http://localhost:11434"

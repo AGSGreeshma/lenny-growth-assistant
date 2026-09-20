@@ -1,9 +1,16 @@
 """
-LLM provider fallback (app/llm/router.py): Ollama first, OpenAI second, clear
-failure when neither works. No real network calls -- both clients are
-mocked. This is the behavior the "mandatory local Ollama" and "cloud LLM"
-requirements both depend on, and the one place both the plain chat path and
-every skill (Ship 30, HTML artifact) share.
+LLM provider fallback (app/llm/router.py): Ollama first, Gemini second,
+clear failure when neither works. No real network calls -- all three
+clients are mocked. This is the behavior the "mandatory local Ollama" and
+"cloud LLM" requirements both depend on, and the one place both the plain
+chat path and every skill (Ship 30, HTML artifact) share.
+
+OpenAI is deliberately NOT part of the automatic (AUTO) chain -- it's
+reachable only via an explicit provider="openai" / FORCE_LLM_PROVIDER=openai
+request, so an unfunded or intentionally-reserved OpenAI key is never
+silently used by a Gemini/Ollama failure. Tests below cover both the AUTO
+chain (Ollama -> Gemini) and each of the three explicit-provider paths
+separately.
 
 OllamaClient.generate() returns (content, hit_deadline) -- hit_deadline is
 True when the soft OLLAMA_TIMEOUT_SECONDS budget ran out before the model
@@ -61,46 +68,166 @@ def test_default_ollama_timeout_is_120_seconds():
     assert router_mod.OLLAMA_TIMEOUT_SECONDS == 120.0
 
 
+# --- AUTO chain: Ollama -> Gemini (OpenAI never entered automatically) -----
+
+
 @pytest.mark.asyncio
-async def test_ollama_failure_falls_back_to_openai():
+async def test_ollama_failure_falls_back_to_gemini():
     with patch.object(router_mod, "OllamaClient") as MockOllama, patch.object(
-        router_mod, "OPENAI_API_KEY", "sk-test"
-    ), patch("app.llm.openai_client.OpenAIClient") as MockOpenAI:
+        router_mod, "GEMINI_API_KEY", "AIza-test"
+    ), patch("app.llm.gemini_client.GeminiClient") as MockGemini:
         MockOllama.return_value.generate = AsyncMock(side_effect=RuntimeError("connection refused"))
-        MockOpenAI.return_value.generate = AsyncMock(return_value="hello from openai")
+        MockGemini.return_value.generate = AsyncMock(return_value="hello from gemini")
 
         answer, provider = await router_mod.generate_with_fallback(
             messages=[{"role": "user", "content": "hi"}], system_prompt="sys"
         )
 
-    assert provider == "openai"
-    assert answer == "hello from openai"
+    assert provider == "gemini"
+    assert answer == "hello from gemini"
 
 
 @pytest.mark.asyncio
-async def test_both_providers_failing_raises_runtime_error():
+async def test_auto_chain_never_reaches_openai_on_ollama_failure():
+    """The core architectural change under test: AUTO falls back to Gemini
+    only. OpenAI must never be constructed/called by the automatic chain,
+    even when a valid OPENAI_API_KEY happens to be configured."""
     with patch.object(router_mod, "OllamaClient") as MockOllama, patch.object(
-        router_mod, "OPENAI_API_KEY", "sk-test"
-    ), patch("app.llm.openai_client.OpenAIClient") as MockOpenAI:
-        MockOllama.return_value.generate = AsyncMock(side_effect=RuntimeError("ollama down"))
-        MockOpenAI.return_value.generate = AsyncMock(side_effect=RuntimeError("openai down"))
+        router_mod, "GEMINI_API_KEY", "AIza-test"
+    ), patch.object(router_mod, "OPENAI_API_KEY", "sk-test"), patch(
+        "app.llm.gemini_client.GeminiClient"
+    ) as MockGemini, patch(
+        "app.llm.openai_client.OpenAIClient"
+    ) as MockOpenAI:
+        MockOllama.return_value.generate = AsyncMock(side_effect=RuntimeError("connection refused"))
+        MockGemini.return_value.generate = AsyncMock(return_value="hello from gemini")
 
-        with pytest.raises(RuntimeError):
+        answer, provider = await router_mod.generate_with_fallback(
+            messages=[{"role": "user", "content": "hi"}], system_prompt="sys"
+        )
+
+    assert provider == "gemini"
+    MockOpenAI.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_both_ollama_and_gemini_failing_raises_runtime_error():
+    with patch.object(router_mod, "OllamaClient") as MockOllama, patch.object(
+        router_mod, "GEMINI_API_KEY", "AIza-test"
+    ), patch("app.llm.gemini_client.GeminiClient") as MockGemini:
+        MockOllama.return_value.generate = AsyncMock(side_effect=RuntimeError("ollama down"))
+        MockGemini.return_value.generate = AsyncMock(side_effect=RuntimeError("gemini down"))
+
+        with pytest.raises(RuntimeError, match="Both Ollama and Gemini"):
             await router_mod.generate_with_fallback(messages=[], system_prompt="sys")
 
 
 @pytest.mark.asyncio
-async def test_ollama_failure_with_no_cloud_key_configured_raises_clear_error():
-    """This is the mandatory Ollama-only demo path: no OPENAI_API_KEY at all.
-    A failure here must be an explicit, actionable RuntimeError -- not a
-    silent success or an unrelated exception."""
+async def test_ollama_failure_with_no_gemini_key_configured_raises_clear_error():
+    """This is the mandatory Ollama-only demo path: no GEMINI_API_KEY at
+    all. A failure here must be an explicit, actionable RuntimeError -- not
+    a silent success, not a fall-through to OpenAI, and not an unrelated
+    exception."""
     with patch.object(router_mod, "OllamaClient") as MockOllama, patch.object(
-        router_mod, "OPENAI_API_KEY", None
+        router_mod, "GEMINI_API_KEY", None
     ):
         MockOllama.return_value.generate = AsyncMock(side_effect=RuntimeError("ollama down"))
 
-        with pytest.raises(RuntimeError, match="OPENAI_API_KEY is not configured"):
+        with pytest.raises(RuntimeError, match="GEMINI_API_KEY is not configured"):
             await router_mod.generate_with_fallback(messages=[], system_prompt="sys")
+
+
+# --- Explicit provider selection: never silently switches -----------------
+
+
+@pytest.mark.asyncio
+async def test_explicit_gemini_provider():
+    with patch.object(router_mod, "GEMINI_API_KEY", "AIza-test"), patch(
+        "app.llm.gemini_client.GeminiClient"
+    ) as MockGemini, patch.object(router_mod, "OllamaClient") as MockOllama:
+        MockGemini.return_value.generate = AsyncMock(return_value="explicit gemini answer")
+
+        answer, provider = await router_mod.generate_with_fallback(
+            messages=[{"role": "user", "content": "hi"}],
+            system_prompt="sys",
+            force_provider="gemini",
+        )
+
+    assert provider == "gemini"
+    assert answer == "explicit gemini answer"
+    MockOllama.return_value.generate.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_explicit_gemini_with_missing_key_raises_clear_error():
+    with patch.object(router_mod, "GEMINI_API_KEY", None):
+        with pytest.raises(RuntimeError, match="Gemini provider was requested but GEMINI_API_KEY"):
+            await router_mod.generate_with_fallback(
+                messages=[{"role": "user", "content": "hi"}],
+                system_prompt="sys",
+                force_provider="gemini",
+            )
+
+
+@pytest.mark.asyncio
+async def test_explicit_gemini_failure_does_not_fall_back_to_ollama_or_openai():
+    """Explicitly requesting Gemini must fail loudly if Gemini fails, not
+    silently hand the answer to a different provider than the one asked
+    for -- same contract explicit Ollama already has."""
+    with patch.object(router_mod, "GEMINI_API_KEY", "AIza-test"), patch(
+        "app.llm.gemini_client.GeminiClient"
+    ) as MockGemini, patch.object(router_mod, "OllamaClient") as MockOllama, patch.object(
+        router_mod, "OPENAI_API_KEY", "sk-test"
+    ), patch("app.llm.openai_client.OpenAIClient") as MockOpenAI:
+        MockGemini.return_value.generate = AsyncMock(
+            side_effect=RuntimeError("invalid model: gemini-does-not-exist")
+        )
+
+        with pytest.raises(RuntimeError, match="invalid model"):
+            await router_mod.generate_with_fallback(
+                messages=[{"role": "user", "content": "hi"}],
+                system_prompt="sys",
+                force_provider="gemini",
+            )
+
+    MockOllama.return_value.generate.assert_not_called()
+    MockOpenAI.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_explicit_ollama_provider_unaffected_by_gemini_migration():
+    with patch.object(router_mod, "OllamaClient") as MockOllama:
+        MockOllama.return_value.generate = AsyncMock(return_value=("explicit ollama answer", False))
+
+        answer, provider = await router_mod.generate_with_fallback(
+            messages=[{"role": "user", "content": "hi"}],
+            system_prompt="sys",
+            force_provider="ollama",
+        )
+
+    assert provider == "ollama"
+    assert answer == "explicit ollama answer"
+
+
+@pytest.mark.asyncio
+async def test_request_level_force_provider_ollama_does_not_fall_back_to_gemini():
+    """Explicitly requesting Ollama must fail loudly if Ollama fails, not
+    silently hand the answer to Gemini -- Gemini is the AUTO chain's
+    fallback, not a substitute for an explicit choice."""
+    with patch.object(router_mod, "OllamaClient") as MockOllama, patch.object(
+        router_mod, "GEMINI_API_KEY", "AIza-test"
+    ), patch("app.llm.gemini_client.GeminiClient") as MockGemini:
+        MockOllama.return_value.generate = AsyncMock(side_effect=RuntimeError("ollama down"))
+        MockGemini.return_value.generate = AsyncMock(return_value="should not be used")
+
+        with pytest.raises(RuntimeError, match="Ollama was requested"):
+            await router_mod.generate_with_fallback(
+                messages=[{"role": "user", "content": "hi"}],
+                system_prompt="sys",
+                force_provider="ollama",
+            )
+
+    MockGemini.return_value.generate.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -172,8 +299,8 @@ async def test_request_level_force_provider_ollama_does_not_fall_back_to_openai(
 # returns (content, hit_deadline=True) with whatever was generated so far
 # when the budget runs out. A *shorter but substantial* response is a normal
 # success; a cutoff that produced too little to be useful is treated as a
-# failure so a cloud fallback (if configured) gets a chance instead of
-# returning a near-empty fragment as a real answer.
+# failure so a cloud fallback (Gemini, if configured) gets a chance instead
+# of returning a near-empty fragment as a real answer.
 
 
 @pytest.mark.asyncio
@@ -193,23 +320,23 @@ async def test_soft_deadline_with_substantial_content_returns_normally():
 
 
 @pytest.mark.asyncio
-async def test_soft_deadline_with_too_little_content_falls_back_to_openai():
+async def test_soft_deadline_with_too_little_content_falls_back_to_gemini():
     """If the 120s budget runs out while the model is still mid-Hook, the
     fragment isn't useful -- this must behave like a failure and fall back
-    to OpenAI when configured, not return the fragment as a real answer."""
+    to Gemini when configured, not return the fragment as a real answer."""
     tiny_fragment = "In a shocking turn of events, growth teams"
     with patch.object(router_mod, "OllamaClient") as MockOllama, patch.object(
-        router_mod, "OPENAI_API_KEY", "sk-test"
-    ), patch("app.llm.openai_client.OpenAIClient") as MockOpenAI:
+        router_mod, "GEMINI_API_KEY", "AIza-test"
+    ), patch("app.llm.gemini_client.GeminiClient") as MockGemini:
         MockOllama.return_value.generate = AsyncMock(return_value=(tiny_fragment, True))
-        MockOpenAI.return_value.generate = AsyncMock(return_value="hello from openai")
+        MockGemini.return_value.generate = AsyncMock(return_value="hello from gemini")
 
         answer, provider = await router_mod.generate_with_fallback(
             messages=[{"role": "user", "content": "hi"}], system_prompt="sys"
         )
 
-    assert provider == "openai"
-    assert answer == "hello from openai"
+    assert provider == "gemini"
+    assert answer == "hello from gemini"
 
 
 @pytest.mark.asyncio
@@ -221,7 +348,7 @@ async def test_soft_deadline_with_too_little_content_and_no_fallback_raises_time
     generic 502."""
     tiny_fragment = "Just getting started here"
     with patch.object(router_mod, "OllamaClient") as MockOllama, patch.object(
-        router_mod, "OPENAI_API_KEY", None
+        router_mod, "GEMINI_API_KEY", None
     ):
         MockOllama.return_value.generate = AsyncMock(return_value=(tiny_fragment, True))
 
@@ -236,8 +363,8 @@ async def test_ollama_read_timeout_with_force_provider_ollama_raises_generation_
     """A real httpx timeout (the connection genuinely hanging, or the
     last-resort backstop firing) with the provider explicitly forced to
     ollama must surface as GenerationTimeoutError with the actionable
-    message, not a
-    generic RuntimeError wrapping a raw httpx exception string."""
+    message, not a generic RuntimeError wrapping a raw httpx exception
+    string."""
     with patch.object(router_mod, "OllamaClient") as MockOllama:
         MockOllama.return_value.generate = AsyncMock(side_effect=httpx.ReadTimeout("timed out"))
 

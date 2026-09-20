@@ -7,7 +7,7 @@ HTML one-pager.
 
 > **Status:** RAG pipeline, session persistence, the React frontend, the agent
 > routing layer (Claude Agent SDK), the Ship 30 essay and HTML artifact skills,
-> Ollama→OpenAI fallback with a provider toggle, Docker Compose packaging, and
+> Ollama→Gemini fallback with a provider toggle, Docker Compose packaging, and
 > an automated pytest suite are all implemented and verified. `docker compose
 > up --build` has been run end-to-end on a fresh database: all three services
 > (db/backend/frontend) start healthy, the backend auto-creates its schema
@@ -15,19 +15,26 @@ HTML one-pager.
 > reaches host-run Ollama via `host.docker.internal`, and a real chat request
 > round-trips correctly through the containerized stack.
 >
-> **Known limitation:** the OpenAI cloud-fallback integration is code-complete
-> and was verified reaching OpenAI's real API (a forced Ollama failure
-> correctly triggered the fallback and hit OpenAI's servers) — but the
-> currently-configured `OPENAI_API_KEY` is rejected with a real `401
-> Incorrect API key provided` from OpenAI's own API (confirmed via live
-> logs), not a "zero credits" quota error as earlier documentation here
-> assumed — so it has not produced a real successful cloud-generated answer
-> end-to-end. Practically, this means the cloud fallback is currently
-> non-functional: if Ollama fails or its soft-deadline cutoff produces too
-> little content, the request fails outright instead of degrading to
-> OpenAI. This does not affect the mandatory local Ollama demo path, which
-> is unaffected and fully verified. Fixing this requires a valid, funded
-> OpenAI key, which is out of scope for this engagement.
+> **Provider architecture:** the automatic (AUTO) chain is Ollama → Gemini
+> only. OpenAI is fully implemented and selectable explicitly
+> (`provider="openai"` / `FORCE_LLM_PROVIDER=openai`) but is deliberately
+> **not** part of the automatic fallback — this is a product decision (an
+> unfunded or intentionally-reserved OpenAI key should never be silently
+> billed by a Gemini/Ollama failure), not a limitation. See "Ship 30 for 30
+> length vs. local-model latency" below and `agent_transcripts/` for the
+> full reasoning.
+>
+> **Known limitation:** `OPENAI_API_KEY` (when explicitly selected) was
+> previously verified reaching OpenAI's real API but rejected with a `401
+> Incorrect API key provided` — it needs a valid, funded key to actually
+> generate, which is out of scope for this engagement. **Gemini's
+> integration is new and not yet independently live-verified end-to-end
+> with a real funded request** in this repository's own testing — the
+> router-level logic is covered by automated tests (mocked, no real network
+> call), but confirm `GEMINI_API_KEY`/`GEMINI_MODEL` actually generate a
+> real response on your own setup before relying on it. Neither of this
+> affects the mandatory local Ollama demo path, which is unaffected and
+> fully verified.
 >
 > **Deliberate trade-off:** the Ship 30 for 30 skill targets ~1,240–1,250
 > words as its ideal content length, but the local Ollama path runs under a
@@ -77,10 +84,8 @@ Session API            Chat / Essay /          Agent layer
                     Grounded LLM Generation
                     (app/llm/router.py)
                              |
-                    +--------+--------+
-                    v                 v
-                 Ollama            OpenAI
-              (local, default)    (fallback)
+              AUTO: Ollama (local, default) -> Gemini (cloud fallback)
+              Explicit-only (never automatic): OpenAI
 ```
 
 ---
@@ -136,7 +141,7 @@ See "Verifying the Ollama-only (fully offline) path" below.
 classifying a chat message's intent (chat / essay / html_artifact) and
 optionally checking the knowledge base first via a narrow, read-only MCP
 tool. It never generates the final answer — that always flows through
-`app/llm/router.py` (Ollama-first, OpenAI-fallback), unchanged regardless of
+`app/llm/router.py` (Ollama-first, Gemini-fallback; OpenAI explicit-only), unchanged regardless of
 which router made the classification. Full detail, including the
 `permission_mode="dontAsk"` security choice, is in
 `docs/architecture.md`'s "Agent layer" section.
@@ -148,10 +153,10 @@ every question returns "not grounded." See "Option A: Docker Compose"
 below for the full 3-step sequence (Ollama → Docker Compose → ingest).
 
 **How do I run the mandatory Ollama-only demo?**
-Unset/omit `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` (or set
-`AGENT_SDK_ENABLED=false`), start the app, and confirm `"provider": "ollama"`
-in every response. See "Verifying the Ollama-only (fully offline) path"
-below.
+Unset/omit `GEMINI_API_KEY`, `OPENAI_API_KEY`, and `ANTHROPIC_API_KEY` (or
+set `AGENT_SDK_ENABLED=false`), start the app, and confirm
+`"provider": "ollama"` in every response. See "Verifying the Ollama-only
+(fully offline) path" below.
 
 **How do I run the tests?**
 `cd backend && pip install -r requirements-dev.txt && pytest tests -v`. See
@@ -163,11 +168,13 @@ Routing degrades to the local heuristic classifier; the rest of the request
 and `router_error` (non-null) are visible in the response/logs.
 
 **What happens if Ollama is down?**
-`generate_with_fallback` catches the failure and retries against OpenAI
-(if `OPENAI_API_KEY` is set); `/api/health` reports `"ollama": {"status":
-"..."}` independently so this is diagnosable at a glance. If OpenAI is also
-unavailable, the request fails with a `502` and an actionable message
-rather than a raw stack trace.
+`generate_with_fallback` catches the failure and retries against Gemini
+(if `GEMINI_API_KEY` is set) — this is the AUTO chain; OpenAI is never
+tried automatically, only via explicit provider selection. `/api/health`
+reports `"ollama": {"status": "..."}` independently so this is diagnosable
+at a glance. If Gemini is also unavailable (or not configured), the
+request fails with a `502` and an actionable message rather than a raw
+stack trace.
 
 **What happens on an empty/no-match retrieval result?**
 If no transcript chunk clears `RAG_MIN_SIMILARITY` (default 0.30), the app
@@ -189,7 +196,7 @@ budget, not a hard cutoff — Ollama's response is streamed, and if this budget
 runs out before the model finishes, whatever coherent content has been
 generated so far is returned (trimmed to a clean sentence boundary) instead
 of being discarded. Only if that leaves too little content to be useful does
-it retry against OpenAI (if configured) or return a clean, actionable `504`.
+it retry against Gemini (if configured) or return a clean, actionable `504`.
 See "Ship 30 for 30 length vs. local-model latency" below for why 120s was
 chosen deliberately, not guessed.
 
@@ -209,8 +216,10 @@ chosen deliberately, not guessed.
 - **A Postgres database with the pgvector extension** — either:
   - Docker (for `docker compose up`, which provisions this for you), or
   - A managed Postgres with pgvector already available (e.g. Supabase)
-- Optional: an **OpenAI API key** for cloud fallback, and an **Anthropic API
-  key** if you want the agent routing layer to use the real Claude Agent SDK
+- Optional: a **Gemini API key** (free, no card — [aistudio.google.com/apikey](https://aistudio.google.com/apikey))
+  for the automatic cloud fallback, an **OpenAI API key** if you want OpenAI
+  available via explicit provider selection (never used automatically), and
+  an **Anthropic API key** if you want the agent routing layer to use the real Claude Agent SDK
   instead of its offline heuristic fallback. No separate `npm install -g
   @anthropic-ai/claude-code` step is needed — the `claude-agent-sdk` pip
   package (already in `backend/requirements.txt`) bundles the Claude Code CLI
@@ -419,6 +428,7 @@ To verify:
 
 ```bash
 # In the shell running the backend, make sure no cloud keys are set:
+unset GEMINI_API_KEY
 unset OPENAI_API_KEY
 unset ANTHROPIC_API_KEY
 # or set AGENT_SDK_ENABLED=false in .env to skip the agent SDK attempt entirely
@@ -459,20 +469,22 @@ within the runtime budget take priority over hitting an exact word count.
 
 If the budget runs out so early that too little was generated to be useful
 (not just "shorter," but not actually a usable answer), that's treated as a
-failure: the app retries against OpenAI if configured, or returns a clean
-`504` explaining the local runtime limit was exceeded — never a raw
-stack trace.
+failure: the app retries against Gemini if configured (the AUTO chain's
+only automatic fallback — OpenAI is never entered automatically), or
+returns a clean `504` explaining the local runtime limit was exceeded —
+never a raw stack trace.
 
-**Cloud path (optional):** when a supported cloud provider such as OpenAI is
-configured with a valid, funded API key, the same generation workflow
-benefits from that provider's own inference speed and isn't bound by this
-machine's CPU throughput, so it has much more practical headroom to reach
-the full ~1,250-word target on every request. This repo's own
-`OPENAI_API_KEY` is *not* currently backed by a funded account (see the
-Status note at the top of this README) — the cloud path is code-complete and
-was verified reaching OpenAI's real API, but a real successful long-form
-cloud generation has not been observed end-to-end. The local Ollama path
-remains fully functional and is what the mandatory demo relies on regardless.
+**Cloud path (optional):** when Gemini is configured with a valid API key
+(free tier, no card required), the same generation workflow benefits from
+cloud inference speed and isn't bound by this machine's CPU throughput, so
+it has much more practical headroom to reach the full ~1,250-word target on
+every request. OpenAI is also fully implemented and can be selected
+explicitly (`provider="openai"` / `FORCE_LLM_PROVIDER=openai`) once you have
+a funded key — this repo's own `OPENAI_API_KEY` is *not* currently backed
+by a funded account (see the Status note at the top of this README), which
+is exactly why it's excluded from the automatic chain rather than being a
+problem to fix. The local Ollama path remains fully functional and is what
+the mandatory demo relies on regardless.
 
 ---
 
@@ -486,16 +498,17 @@ relevant:
 | `DATABASE_URL` | Postgres connection string (pgvector required) |
 | `OLLAMA_BASE_URL` / `OLLAMA_MODEL` | Local model config (mandatory path) |
 | `OLLAMA_TIMEOUT_SECONDS` | Soft generation budget, not a hard cutoff (default `120`, deliberate trade-off — see "Ship 30 for 30 length vs. local-model latency" above). Responses are streamed; if the budget runs out, whatever was generated so far is returned (trimmed cleanly) rather than discarded. |
-| `OPENAI_API_KEY` | Cloud fallback; blank = fully offline (fails if Ollama also fails) |
-| `FORCE_LLM_PROVIDER` | Deployment-wide provider override (`openai` or blank) |
+| `GEMINI_API_KEY` / `GEMINI_MODEL` | The AUTO chain's cloud fallback (Ollama → Gemini). Free tier, no card required — [aistudio.google.com/apikey](https://aistudio.google.com/apikey). `GEMINI_MODEL` defaults to `gemini-2.5-flash`; `gemini-2.0-flash` is deprecated, do not use it. Blank `GEMINI_API_KEY` = fully offline (fails if Ollama also fails). |
+| `OPENAI_API_KEY` | Explicit-only cloud provider — never used automatically, only via `provider="openai"` / `FORCE_LLM_PROVIDER=openai` |
+| `FORCE_LLM_PROVIDER` | Deployment-wide provider override (`ollama` \| `gemini` \| `openai` or blank) |
 | `RAG_MIN_SIMILARITY` | Cosine-similarity floor for "grounded" (default `0.30`) |
 | `AGENT_SDK_ENABLED` | Enable/disable the Claude Agent SDK routing attempt. **Default differs by setup**: `true` for manual/`config.py` (attempts the real SDK, degrading gracefully if `ANTHROPIC_API_KEY` is absent), but `false` in `docker-compose.yml` — Docker Compose defaults to the local heuristic router only, so `docker compose up` with no overrides is a guaranteed fully-offline demo with zero Anthropic dependency. Override with `AGENT_SDK_ENABLED=true` before `docker compose up` to opt into the real SDK there too. |
 | `ANTHROPIC_API_KEY` | Required only if `AGENT_SDK_ENABLED=true` |
 | `CORS_ORIGINS` | Extra allowed frontend origins beyond localhost dev ports |
 
 The frontend also has a **provider toggle** in the header (Auto / Ollama /
-OpenAI) that overrides the backend default on a per-request basis, without
-needing to restart the backend.
+Gemini / OpenAI) that overrides the backend default on a per-request basis,
+without needing to restart the backend.
 
 ---
 

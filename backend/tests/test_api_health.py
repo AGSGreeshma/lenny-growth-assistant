@@ -30,13 +30,13 @@ def test_health_fully_healthy_when_db_ollama_and_embeddings_all_ok(client):
 
 
 @requires_db
-def test_health_degraded_when_ollama_down_but_openai_configured(client):
+def test_health_degraded_when_ollama_down_but_gemini_configured(client):
     import app.main as main_module
 
     with patch.object(
         main_module, "_check_ollama", return_value=("unreachable", "connection refused")
     ), patch.object(main_module, "_check_embedding_model", return_value=("ok", None)), patch(
-        "app.config.OPENAI_API_KEY", "sk-test"
+        "app.config.GEMINI_API_KEY", "test-key"
     ):
         response = client.get("/api/health")
 
@@ -53,7 +53,7 @@ def test_health_unavailable_when_ollama_down_and_no_cloud_fallback(client):
     with patch.object(
         main_module, "_check_ollama", return_value=("unreachable", "connection refused")
     ), patch.object(main_module, "_check_embedding_model", return_value=("ok", None)), patch(
-        "app.config.OPENAI_API_KEY", ""
+        "app.config.GEMINI_API_KEY", ""
     ):
         response = client.get("/api/health")
 

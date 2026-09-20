@@ -97,16 +97,18 @@ def _check_embedding_model() -> tuple[str, str | None]:
 def health():
     """Reports API/DB/Ollama/embedding-model status individually, plus an
     overall rollup that distinguishes "fully healthy" from "degraded but
-    usable" (e.g. Ollama down but OpenAI configured) from "unavailable"
-    (nothing can generate an answer at all). See docs/architecture.md's
+    usable" (e.g. Ollama down but Gemini configured) from "unavailable"
+    (nothing can generate an answer at all). Cloud fallback here means the
+    AUTO chain's automatic cloud provider (Gemini); OpenAI is explicit-only
+    and intentionally excluded from this rollup. See docs/architecture.md's
     Observability section for how each state is used."""
-    from app.config import OPENAI_API_KEY
+    from app.config import GEMINI_API_KEY
 
     db_status, db_error = _check_db()
     ollama_status, ollama_error = _check_ollama()
     embedding_status, embedding_error = _check_embedding_model()
 
-    can_generate = ollama_status == "ok" or bool(OPENAI_API_KEY)
+    can_generate = ollama_status == "ok" or bool(GEMINI_API_KEY)
 
     if db_status == "ok" and ollama_status == "ok" and embedding_status == "ok":
         overall = "healthy"
@@ -121,5 +123,5 @@ def health():
         "db": {"status": db_status, "error": db_error},
         "ollama": {"status": ollama_status, "error": ollama_error, "base_url": OLLAMA_BASE_URL},
         "embedding_model": {"status": embedding_status, "error": embedding_error},
-        "cloud_fallback_configured": bool(OPENAI_API_KEY),
+        "cloud_fallback_configured": bool(GEMINI_API_KEY),
     }

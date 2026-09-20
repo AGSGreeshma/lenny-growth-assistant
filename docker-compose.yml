@@ -47,6 +47,12 @@ services:
       OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-120}
       OLLAMA_NUM_CTX: ${OLLAMA_NUM_CTX:-8192}
       OLLAMA_NUM_PREDICT: ${OLLAMA_NUM_PREDICT:-3000}
+      # Gemini is the AUTO-chain cloud fallback (Ollama -> Gemini). OpenAI
+      # stays wired below but is reachable only via explicit
+      # FORCE_LLM_PROVIDER=openai / a per-request override -- never
+      # automatically -- see app/llm/router.py.
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       FORCE_LLM_PROVIDER: ${FORCE_LLM_PROVIDER:-}
       RAG_MIN_SIMILARITY: ${RAG_MIN_SIMILARITY:-0.30}

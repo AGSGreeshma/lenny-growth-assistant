@@ -1,5 +1,6 @@
 import { useEffect, useMemo } from "react";
 import AnswerContent from "./AnswerContent.jsx";
+import { PROVIDER_LABELS } from "../lib/providers.js";
 
 export default function ArtifactViewer({ artifact, onClose }) {
   const isHtml = artifact?.type === "html";
@@ -37,13 +38,9 @@ export default function ArtifactViewer({ artifact, onClose }) {
           {artifact.provider ? (
             <span
               className="rounded-full border border-line bg-paper px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted"
-              title={
-                artifact.provider === "ollama"
-                  ? "Generated locally via Ollama"
-                  : "Generated via OpenAI (Ollama unavailable or slow)"
-              }
+              title={PROVIDER_LABELS[artifact.provider]?.title ?? artifact.provider}
             >
-              {artifact.provider === "ollama" ? "Local (Ollama)" : "Cloud (OpenAI)"}
+              {PROVIDER_LABELS[artifact.provider]?.badge ?? artifact.provider}
             </span>
           ) : null}
           <span

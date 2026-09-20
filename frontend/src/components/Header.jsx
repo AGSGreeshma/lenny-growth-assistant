@@ -1,6 +1,7 @@
 const PROVIDER_OPTIONS = [
   { value: null, label: "Auto" },
   { value: "ollama", label: "Ollama" },
+  { value: "gemini", label: "Gemini" },
   { value: "openai", label: "OpenAI" },
 ];
 
@@ -9,7 +10,7 @@ function ProviderToggle({ provider, onProviderChange }) {
     <div
       role="radiogroup"
       aria-label="LLM provider"
-      title="Choose which model generates answers: Auto tries local Ollama first and falls back to OpenAI, or pin one provider explicitly."
+      title="Choose which model generates answers: Auto tries local Ollama first and falls back to Gemini, or pin one provider explicitly (OpenAI is never used automatically)."
       className="flex shrink-0 items-center gap-0.5 rounded-xl border border-line bg-cream p-0.5"
     >
       {PROVIDER_OPTIONS.map((option) => {

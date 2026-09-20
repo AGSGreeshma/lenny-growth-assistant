@@ -6,7 +6,8 @@
 YouTube-URL metadata from frontmatter), chunking, embedding, pgvector storage and
 retrieval with a hard relevance floor, grounded Q&A, multi-turn session persistence
 with follow-up context, the Ship 30 for 30 essay skill, the HTML/CSS artifact skill,
-the sandboxed artifact viewer, automatic Ollama→OpenAI fallback with a per-request
+the sandboxed artifact viewer, automatic Ollama→Gemini fallback (OpenAI
+reachable via explicit provider selection only) with a per-request
 provider override, a pytest suite, and Docker Compose packaging.
 
 ## Component overview
@@ -21,11 +22,13 @@ provider override, a pytest suite, and Docker Compose packaging.
                 ▼               ▼                ▼                ▼                  ▼
         ┌───────────────┐ ┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
         │  PostgreSQL    │ │  Embedding   │ │  LLM router   │ │  Agent layer  │ │  Skills       │
-        │  + pgvector    │ │  model       │ │  (app/llm/    │ │  (Claude      │ │  (Ship 30,    │
-        │                │ │ (sentence-   │ │  router.py)   │ │  Agent SDK,   │ │  HTML         │
-        │                │ │ transformers)│ │  Ollama first,│ │  routing      │ │  artifact)    │
-        │                │ │              │ │  OpenAI       │ │  only)        │ │               │
-        │                │ │              │ │  fallback     │ │               │ │               │
+        │  + pgvector    │ │  models      │ │  (app/llm/    │ │  (Claude      │ │  (Ship 30,    │
+        │                │ │ (fastembed   │ │  router.py)   │ │  Agent SDK,   │ │  HTML         │
+        │                │ │  query-time, │ │  Ollama first,│ │  routing      │ │  artifact)    │
+        │                │ │  torch       │ │  Gemini       │ │  only)        │ │               │
+        │                │ │  ingest-time)│ │  fallback,    │ │               │ │               │
+        │                │ │              │ │  OpenAI       │ │               │ │               │
+        │                │ │              │ │  explicit-only│ │               │ │               │
         └───────────────┘ └──────────────┘ └──────────────┘ └──────────────┘ └──────────────┘
 ```
 
@@ -156,30 +159,48 @@ agent layer, so both paths produce the same artifact shape.
 5. The frontend renders the answer plus a `SourceCard` per chunk, including a
    clickable YouTube link and similarity score.
 
-## Model routing / dual-provider design
+## Model routing / triple-provider design
 
-`app/llm/openai_client.py` generates in one buffered call.
-`app/llm/ollama_client.py` streams instead, because the local path runs
-under a *soft* generation budget rather than a hard timeout (see the
-sub-section below). `app/llm/router.py` is the single place fallback logic
-lives: it calls Ollama first (satisfying "local model required for the
-demo"), and on an outright failure (connection error, or a stall-guard
-timeout with no output at all), logs a warning and retries against OpenAI —
-used identically by every generation path (`rag/generator.py`,
-`skills/ship30.py`, `skills/html_artifact.py`), so the fallback behavior is
-consistent everywhere an answer is generated. A soft-deadline cutoff that
-still produced a useful amount of content is *not* treated as a failure —
-see below.
+`app/llm/openai_client.py` and `app/llm/gemini_client.py` both generate in
+one buffered call. `app/llm/ollama_client.py` streams instead, because the
+local path runs under a *soft* generation budget rather than a hard timeout
+(see the sub-section below). `app/llm/router.py` is the single place
+fallback logic lives.
+
+**The AUTO chain is Ollama → Gemini only.** On an outright Ollama failure
+(connection error, or a stall-guard timeout with no output at all) or a
+soft-deadline cutoff that produced too little content to be useful, the
+router logs a warning and retries against Gemini — used identically by
+every generation path (`rag/generator.py`, `skills/ship30.py`,
+`skills/html_artifact.py`). **OpenAI is deliberately excluded from the AUTO
+chain** — it's fully implemented (`app/llm/openai_client.py`) but reachable
+only via explicit provider selection, never automatically. This is a
+product decision, not an oversight: an unfunded or intentionally-reserved
+OpenAI key should never be silently used by a Gemini/Ollama failure. A
+soft-deadline cutoff that still produced a useful amount of content is
+*not* treated as a failure either way — see below.
+
+`app/llm/gemini_client.py` is built on the same `openai` pip package
+`OpenAIClient` uses, not a separate Google SDK — Gemini exposes an
+OpenAI-compatible endpoint (`GEMINI_BASE_URL` in `app/config.py`), so
+pointing the existing `AsyncOpenAI` client at it with a Gemini API key and
+model name is the entire integration. `GEMINI_MODEL` defaults to
+`gemini-2.5-flash` (confirmed against `ai.google.dev`'s docs at
+integration time; `gemini-2.0-flash` is deprecated — check Google's current
+model list before assuming this default is still current, since Gemini's
+lineup moves fast).
 
 Two ways to override the default Ollama-first behavior:
-- `FORCE_LLM_PROVIDER=openai` (env var, deployment-wide) bypasses Ollama
-  entirely; unset it when demonstrating the required local model path.
-- A per-request `provider` field (`"ollama" | "openai" | null`) on
-  `ChatRequest`/`EssayRequest`/`ArtifactRequest`, surfaced in the frontend as
-  a provider toggle in the header. This takes precedence over
-  `FORCE_LLM_PROVIDER` for that request; requesting `"ollama"` explicitly
-  fails loudly on error rather than silently falling back to OpenAI, since
-  the caller asked for a specific provider.
+- `FORCE_LLM_PROVIDER=ollama|gemini|openai` (env var, deployment-wide)
+  bypasses the AUTO chain entirely; unset it when demonstrating the
+  required local model path.
+- A per-request `provider` field (`"ollama" | "gemini" | "openai" | null`)
+  on `ChatRequest`/`EssayRequest`/`ArtifactRequest`, surfaced in the
+  frontend as a provider toggle in the header (Auto / Ollama / Gemini /
+  OpenAI). This takes precedence over `FORCE_LLM_PROVIDER` for that
+  request; requesting any provider explicitly fails loudly on error rather
+  than silently falling back to a different one, since the caller asked
+  for something specific.
 
 ### Ship 30 for 30 length vs. local-model latency (soft generation deadline)
 
@@ -230,8 +251,9 @@ timeout to avoid failing outright.
    returned as a normal successful `"ollama"` response — shorter than the
    ~1,250-word ideal, but complete and useful. If the cutoff happened so
    early that there's too little content to be useful at all, it's treated
-   like any other failure: retried against OpenAI if configured, or raised
-   as a `GenerationTimeoutError` with a clean, actionable message (mapped to
+   like any other failure: retried against Gemini if configured (the AUTO
+   chain's only fallback), or raised as a `GenerationTimeoutError` with a
+   clean, actionable message (mapped to
    HTTP `504` by the API layer) — never a raw stack trace.
 
 The prompt itself (`SHIP30_SYSTEM_PROMPT`) is written to match this
@@ -244,17 +266,22 @@ defect** — quality and groundedness within the runtime budget outrank
 hitting an exact word count.
 
 **Cloud path is an optional performance/length enhancement, not a
-requirement:** when a supported cloud provider (OpenAI, via
-`OPENAI_API_KEY`) is configured with valid, funded credentials, the same
-`generate_with_fallback` workflow runs through `OpenAIClient` instead,
-which isn't bound by this machine's CPU throughput — giving materially more
-practical headroom to reach the full ~1,250-word target on every request.
-This repo's own `OPENAI_API_KEY` is present but not currently backed by a
-funded account (see the README's Status note); the cloud code path is
-implemented and was verified reaching OpenAI's real API on a forced-fallback
-test, but a real successful long-form cloud generation has not been observed
-end-to-end. The mandatory local Ollama path does not depend on this in any
-way.
+requirement:** when Gemini (`GEMINI_API_KEY`, the AUTO chain's fallback) is
+configured with a valid API key, the same `generate_with_fallback` workflow
+runs through `GeminiClient` instead, which isn't bound by this machine's CPU
+throughput — giving materially more practical headroom to reach the full
+~1,250-word target on every request. OpenAI is also fully implemented and
+available via explicit provider selection once funded, but is deliberately
+excluded from the AUTO chain (see "Model routing" above) — this repo's own
+`OPENAI_API_KEY` is present but not currently backed by a funded account
+(see the README's Status note); the OpenAI code path was previously
+verified reaching OpenAI's real API on a forced-provider test, but a real
+successful cloud generation through it has not been observed end-to-end.
+Gemini's integration is new and has not yet been independently
+live-verified with a real funded request in this repository's own testing
+either — the router-level fallback logic is covered by automated tests
+(mocked, no real network call). The mandatory local Ollama path does not
+depend on either of these in any way.
 
 ## Agent layer (Claude Agent SDK)
 
@@ -263,7 +290,7 @@ classifying a chat message's intent (`chat` / `essay` / `html_artifact`),
 optionally calling a `retrieve_transcripts` MCP tool (`app/agent/tools.py`)
 to check the knowledge base first. It never writes the final answer text —
 every generation path still flows through `generate_with_fallback`
-(Ollama-first, OpenAI-fallback), completely unchanged. This is deliberate:
+(Ollama-first, Gemini-fallback; OpenAI explicit-only), completely unchanged. This is deliberate:
 the Agent SDK talks to the Anthropic API only, so if it wrote answers
 directly, every successful request would silently become cloud-generated,
 making the "local model mandatory for the demo" requirement untestable. See
@@ -426,9 +453,10 @@ before assuming it's an application bug.
   of a bare SQLAlchemy traceback being the only explanation.
 - Empty questions/messages/topics are rejected with a `400` before any DB or
   model call.
-- The Ollama→OpenAI fallback means a stopped local model, or a soft-deadline
-  cutoff that produced too little content, degrades to a working cloud
-  answer (when configured) rather than failing the request outright.
+- The Ollama→Gemini AUTO fallback means a stopped local model, or a
+  soft-deadline cutoff that produced too little content, degrades to a
+  working cloud answer (when configured) rather than failing the request
+  outright. OpenAI is not part of this automatic degradation path.
 
 ## Extending the system
 
@@ -451,8 +479,9 @@ what you're adding:
    `generate_html_artifact()`) that builds the user prompt from the topic +
    context and calls `generate_with_fallback(messages=..., system_prompt=...,
    force_provider=...)` -- this one call is what gets you the Ollama-first,
-   OpenAI-fallback, soft-deadline-timeout behavior for free, identically to
-   every other generation path. Returns `(content, provider)`.
+   Gemini-fallback, soft-deadline-timeout behavior for free (OpenAI stays
+   explicit-only), identically to every other generation path. Returns
+   `(content, provider)`.
 
 Then wire it in (both steps are required -- a skill with only the first is
 unreachable):
